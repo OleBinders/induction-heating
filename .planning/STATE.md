@@ -16,7 +16,7 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 
 | Phase | Status |
 |-------|--------|
-| 1. Project Foundation | Ready to plan |
+| 1. Project Foundation | Ready to execute (3 plans) |
 | 2. Electromagnetic Engine | Pending |
 | 3. Curie Transition | Pending |
 | 4. GUI Framework | Pending |
@@ -36,4 +36,4 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 
 ## Next Action
 
-Run `/gsd-plan-phase 1` to create detailed plan for Phase 1: Project Foundation.
+Run `/gsd-execute-phase 1` to execute Phase 1: Project Foundation.
