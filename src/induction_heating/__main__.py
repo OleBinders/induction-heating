@@ -2,19 +2,9 @@
 
 import sys
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
-
-class MainWindow(QMainWindow):
-    """Main application window."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle("Induction Heating Simulator")
-        self.setMinimumSize(800, 600)
-        label = QLabel("Induction Heating Simulator\n\nReady.", alignment=Qt.AlignCenter)
-        self.setCentralWidget(label)
+from induction_heating.gui.main_window import MainWindow
 
 
 def main() -> None:
