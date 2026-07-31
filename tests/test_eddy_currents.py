@@ -228,7 +228,7 @@ class TestCalculationPipeline:
         )
         expected_keys = {
             "skin_depth", "b_field_surface", "current_density",
-            "power_density", "total_power", "radial_positions",
+            "power_density", "total_power", "radial_positions", "snapshot",
         }
         assert set(result.keys()) == expected_keys
 

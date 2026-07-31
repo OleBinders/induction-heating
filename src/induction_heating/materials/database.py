@@ -9,6 +9,7 @@ from typing import Any
 
 from scipy.interpolate import CubicSpline, PchipInterpolator
 
+from induction_heating.materials.curie_transition import permeability_sigmoid
 from induction_heating.materials.schemas import Material
 
 
@@ -171,3 +172,48 @@ class MaterialDatabase:
             value = 1.0
 
         return value
+
+    def get_permeability(
+        self, material_name: str, temperature: float
+    ) -> float:
+        """Get relative permeability at a given temperature.
+
+        Uses the best available method:
+        1. If material has permeability data points: PchipInterpolator
+        2. If material has curie_temperature but no data: sigmoid model
+        3. If material is non-magnetic: returns 1.0
+
+        Args:
+            material_name: Name of the material.
+            temperature: Temperature in °C.
+
+        Returns:
+            Relative permeability μᵣ(T), guaranteed ≥ 1.0.
+        """
+        key = self._resolve_material_key(material_name)
+        material = self._materials[key]
+
+        # Method 1: Data-driven interpolation
+        if "relative_permeability" in self._interpolators[key]:
+            interp = self._interpolators[key]["relative_permeability"]
+            temp_range = self._interpolators[key]["relative_permeability_range"]
+
+            if temp_range[0] <= temperature <= temp_range[1]:
+                value = float(interp(temperature))
+                return max(value, 1.0)
+
+            # Outside data range: fall through to model-based
+
+        # Method 2: Sigmoid model (if curie_temperature available)
+        if material.curie_temperature is not None:
+            # Estimate mu_r_0 from data or use default
+            if "relative_permeability" in self._interpolators[key]:
+                interp = self._interpolators[key]["relative_permeability"]
+                mu_r_0 = float(interp(temp_range[0]))
+            else:
+                mu_r_0 = 200.0  # Default for steel
+
+            return permeability_sigmoid(temperature, mu_r_0, material.curie_temperature)
+
+        # Method 3: Non-magnetic
+        return 1.0

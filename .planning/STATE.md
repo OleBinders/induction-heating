@@ -1,7 +1,7 @@
 # State: Induction Heating Simulator
 
-**Current Phase:** Phase 3 — Temperature-Dependent Properties & Curie Transition
-**Current Status:** Phase 3 planning complete, ready for execution
+**Current Phase:** Phase 4 — GUI Framework & Parameter Input
+**Current Status:** Phase 3 complete, ready for Phase 4
 **Last Updated:** 2026-07-30
 
 ## Project Reference
@@ -10,7 +10,7 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 
 **Core value:** Accurately predict induction heating behavior for surface hardening and brazing applications using analytical methods with temperature-dependent material properties.
 
-**Current focus:** Phase 3 — Temperature-Dependent Properties & Curie Transition
+**Current focus:** Phase 4 — GUI Framework & Parameter Input
 
 ## Phase State
 
@@ -18,8 +18,8 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 |-------|--------|
 | 1. Project Foundation | Complete (35 tests pass) |
 | 2. Electromagnetic Engine | Complete (111 tests pass) |
-| 3. Curie Transition | Ready to execute (2 plans) |
-| 4. GUI Framework | Pending |
+| 3. Curie Transition | Complete (159 tests pass) |
+| 4. GUI Framework | Ready to plan |
 | 5. Cross-Section Visualization | Pending |
 | 6. Results & Export | Pending |
 | 7. Validation & Testing | Pending |
@@ -41,7 +41,8 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 - Eddy current: exponential decay for a/δ > 4, Kelvin functions for a/δ ≤ 4
 - Trapezoidal integration for total power
 - Data-driven Curie transition (PchipInterpolator) with sigmoid fallback
+- PropertySnapshot for consistent temperature-dependent property access
 
 ## Next Action
 
-Run `/gsd-execute-phase 3` to execute Phase 3: Temperature-Dependent Properties & Curie Transition.
+Run `/gsd-plan-phase 4` to create detailed plan for Phase 4: GUI Framework & Parameter Input.

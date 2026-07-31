@@ -8,7 +8,7 @@ Build a scientific Python desktop application for calculating and visualizing in
 
 - [x] **Phase 1: Project Foundation** — Project structure, dependencies, unit system, material library with temperature-dependent properties
 - [x] **Phase 2: Electromagnetic Calculation Engine** — Skin depth, magnetic field distribution, eddy current density, power density for solenoid coil + cylindrical workpiece
-- [ ] **Phase 3: Temperature-Dependent Properties & Curie Transition** — Temperature interpolation, smooth Curie point permeability transition, property evolution
+- [x] **Phase 3: Temperature-Dependent Properties & Curie Transition** — Temperature interpolation, smooth Curie point permeability transition, property evolution
 - [ ] **Phase 4: GUI Framework & Parameter Input** — PySide6 main window, parameter panels, material selector, input validation
 - [ ] **Phase 5: 2D Cross-Section Visualization** — Interactive cross-section view with field/power density contour overlays, pan/zoom
 - [ ] **Phase 6: Results Display & Export** — Numerical results panel, property/field plots, plot export, save/load simulations
@@ -138,7 +138,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Project Foundation | 3/3 | Complete | 2026-07-30 |
 | 2. Electromagnetic Engine | 3/3 | Complete | 2026-07-30 |
-| 3. Curie Transition | 0/2 | Not started | - |
+| 3. Curie Transition | 2/2 | Complete | 2026-07-30 |
 | 4. GUI Framework | 0/2 | Not started | - |
 | 5. Cross-Section Visualization | 0/2 | Not started | - |
 | 6. Results & Export | 0/2 | Not started | - |

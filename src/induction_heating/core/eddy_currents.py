@@ -16,6 +16,7 @@ from scipy.integrate import trapezoid
 from induction_heating.core.electromagnetic import calculate_skin_depth, solenoid_b_field_on_axis
 from induction_heating.core.geometry import InductionSetup
 from induction_heating.materials.database import MaterialDatabase
+from induction_heating.materials.property_evolution import PropertySnapshot
 from induction_heating.utils.constants import mu_0
 
 
@@ -160,23 +161,18 @@ def calculate_induction_heating(
             - power_density: Power density array (W/m³).
             - total_power: Total absorbed power in Watts.
             - radial_positions: Radial positions array (m).
+            - snapshot: PropertySnapshot used for calculations.
     """
     if material_db is None:
         material_db = MaterialDatabase()
 
-    # 1. Get material properties at temperature
-    mat = material_db.get_property_at_temperature
-    resistivity = mat(setup.workpiece.material_name, "resistivity", temperature)
-
-    if setup.workpiece.material_name.lower().startswith("steel") or \
-       setup.workpiece.material_name.lower().startswith("low carbon") or \
-       setup.workpiece.material_name.lower().startswith("medium carbon"):
-        rel_permeability = mat(setup.workpiece.material_name, "relative_permeability", temperature)
-    else:
-        rel_permeability = 1.0
+    # 1. Get all material properties at temperature (single consistent snapshot)
+    snapshot = PropertySnapshot.from_material(
+        material_db, setup.workpiece.material_name, temperature
+    )
 
     # 2. Calculate skin depth
-    skin_depth = calculate_skin_depth(resistivity, rel_permeability, frequency)
+    skin_depth = calculate_skin_depth(snapshot.resistivity, snapshot.relative_permeability, frequency)
 
     # 3. Calculate B-field at workpiece surface (on axis, at z=0)
     b_surface = solenoid_b_field_on_axis(setup.coil, current, 0.0)
@@ -186,17 +182,17 @@ def calculate_induction_heating(
     j_r = eddy_current_density(
         b_surface=b_surface,
         frequency=frequency,
-        resistivity=resistivity,
-        relative_permeability=rel_permeability,
+        resistivity=snapshot.resistivity,
+        relative_permeability=snapshot.relative_permeability,
         workpiece_radius=setup.workpiece.radius,
         radial_positions=r,
     )
 
     # 5. Calculate power density distribution
-    p_r = power_density(j_r, resistivity)
+    p_r = power_density(j_r, snapshot.resistivity)
 
     # 6. Calculate total absorbed power
-    p_total = total_power(j_r, resistivity, setup.workpiece.radius, setup.workpiece.length)
+    p_total = total_power(j_r, snapshot.resistivity, setup.workpiece.radius, setup.workpiece.length)
 
     return {
         "skin_depth": skin_depth,
@@ -205,4 +201,5 @@ def calculate_induction_heating(
         "power_density": p_r,
         "total_power": p_total,
         "radial_positions": r,
+        "snapshot": snapshot,
     }
