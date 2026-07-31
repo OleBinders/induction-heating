@@ -5,8 +5,12 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
+    QComboBox,
     QDockWidget,
+    QFormLayout,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMenuBar,
     QScrollArea,
@@ -19,6 +23,7 @@ from PySide6.QtWidgets import (
 from induction_heating.core.geometry import CylindricalWorkpiece, InductionSetup, SolenoidCoil
 from induction_heating.gui.panels.material_panel import MaterialPanel
 from induction_heating.gui.panels.param_panel import CoilPanel, OperatingPanel, WorkpiecePanel
+from induction_heating.gui.views.cross_section_view import CrossSectionView
 from induction_heating.materials.database import MaterialDatabase
 
 
@@ -127,10 +132,24 @@ class MainWindow(QMainWindow):
         )
         results_widget = QWidget()
         results_layout = QVBoxLayout(results_widget)
-        results_layout.addWidget(QGroupBox("Cross-Section View"))
-        results_layout.addWidget(QGroupBox("Numerical Results"))
-        results_layout.addWidget(QGroupBox("Plots"))
-        results_layout.addStretch()
+
+        # Cross-section view with view toggle
+        view_toggle_layout = QHBoxLayout()
+        view_toggle_layout.addWidget(QLabel("View:"))
+        self.view_combo = QComboBox()
+        self.view_combo.addItem("Magnetic Field (B)")
+        self.view_combo.addItem("Power Density (P)")
+        view_toggle_layout.addWidget(self.view_combo)
+        view_toggle_layout.addStretch()
+
+        self.cross_section_view = CrossSectionView()
+        results_layout.addLayout(view_toggle_layout)
+        results_layout.addWidget(self.cross_section_view, stretch=3)
+
+        # Placeholder for numerical results and plots
+        results_layout.addWidget(QGroupBox("Numerical Results"), stretch=1)
+        results_layout.addWidget(QGroupBox("Plots"), stretch=1)
+
         self.results_dock.setWidget(results_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.results_dock)
 
@@ -141,11 +160,17 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Ready")
 
     def _connect_signals(self) -> None:
-        """Connect panel signals to validation."""
+        """Connect panel signals to validation and Run button."""
         self.coil_panel.changed.connect(self._validate_inputs)
         self.workpiece_panel.changed.connect(self._validate_inputs)
         self.operating_panel.changed.connect(self._validate_inputs)
         self.material_panel.material_changed.connect(self._validate_inputs)
+
+        # Run button
+        self.run_action.triggered.connect(self._run_calculation)
+
+        # View toggle
+        self.view_combo.currentIndexChanged.connect(self._on_view_changed)
 
     def _validate_inputs(self) -> bool:
         """Validate all inputs and update status bar and Run button.
@@ -212,3 +237,24 @@ class MainWindow(QMainWindow):
         )
         gap = coil.inner_radius - workpiece.radius
         return InductionSetup(coil=coil, workpiece=workpiece, gap=gap)
+
+    def _run_calculation(self) -> None:
+        """Run the induction heating calculation and update the cross-section view."""
+        try:
+            setup = self.get_setup()
+        except ValueError:
+            return
+
+        current = self.operating_panel.current_spin.value()
+        frequency = self.operating_panel.frequency_spin.value()
+
+        self.status_bar.showMessage("Calculating...")
+        self.cross_section_view.calculate_and_plot_field(setup, current)
+        self.status_bar.showMessage("Calculation complete")
+
+    def _on_view_changed(self, index: int) -> None:
+        """Handle view toggle change."""
+        if index == 0:
+            self.cross_section_view.set_view("b_field")
+        else:
+            self.cross_section_view.set_view("power_density")
