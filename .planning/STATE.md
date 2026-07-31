@@ -1,7 +1,7 @@
 # State: Induction Heating Simulator
 
-**Current Phase:** Phase 1 — Project Foundation
-**Current Status:** Planning complete, ready for execution
+**Current Phase:** Phase 2 — Electromagnetic Calculation Engine
+**Current Status:** Phase 1 complete, ready for Phase 2
 **Last Updated:** 2026-07-30
 
 ## Project Reference
@@ -10,14 +10,14 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 
 **Core value:** Accurately predict induction heating behavior for surface hardening and brazing applications using analytical methods with temperature-dependent material properties.
 
-**Current focus:** Phase 1 — Project Foundation
+**Current focus:** Phase 2 — Electromagnetic Calculation Engine
 
 ## Phase State
 
 | Phase | Status |
 |-------|--------|
-| 1. Project Foundation | Ready to execute (3 plans) |
-| 2. Electromagnetic Engine | Pending |
+| 1. Project Foundation | Complete (35 tests pass) |
+| 2. Electromagnetic Engine | Ready to plan |
 | 3. Curie Transition | Pending |
 | 4. GUI Framework | Pending |
 | 5. Cross-Section Visualization | Pending |
@@ -33,7 +33,9 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 - HDF5 for simulation data
 - Frequency range: 10-50 kHz
 - Focus: surface hardening and brazing
+- CubicSpline for resistivity interpolation, PchipInterpolator for permeability
+- Partial name matching for material lookup
 
 ## Next Action
 
-Run `/gsd-execute-phase 1` to execute Phase 1: Project Foundation.
+Run `/gsd-plan-phase 2` to create detailed plan for Phase 2: Electromagnetic Calculation Engine.
