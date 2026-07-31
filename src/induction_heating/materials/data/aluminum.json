@@ -1,0 +1,20 @@
+{
+  "name": "Aluminum (6061)",
+  "category": "aluminum",
+  "density": 2700,
+  "curie_temperature": null,
+  "resistivity": {
+    "data": [
+      {"temperature": 20, "value": 2.65e-8},
+      {"temperature": 100, "value": 3.45e-8},
+      {"temperature": 200, "value": 4.10e-8},
+      {"temperature": 400, "value": 5.20e-8},
+      {"temperature": 500, "value": 5.70e-8},
+      {"temperature": 600, "value": 6.10e-8},
+      {"temperature": 660, "value": 6.40e-8}
+    ],
+    "unit": "ohm*m",
+    "temperature_unit": "degC"
+  },
+  "relative_permeability": null
+}

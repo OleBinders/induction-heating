@@ -1,0 +1,37 @@
+{
+  "name": "Medium Carbon Steel (AISI 1045)",
+  "category": "steel",
+  "density": 7850,
+  "curie_temperature": 760,
+  "resistivity": {
+    "data": [
+      {"temperature": 20, "value": 1.70e-7},
+      {"temperature": 100, "value": 2.35e-7},
+      {"temperature": 200, "value": 3.20e-7},
+      {"temperature": 400, "value": 5.00e-7},
+      {"temperature": 600, "value": 7.20e-7},
+      {"temperature": 700, "value": 8.50e-7},
+      {"temperature": 800, "value": 9.50e-7},
+      {"temperature": 900, "value": 1.05e-6},
+      {"temperature": 1000, "value": 1.15e-6}
+    ],
+    "unit": "ohm*m",
+    "temperature_unit": "degC"
+  },
+  "relative_permeability": {
+    "data": [
+      {"temperature": 20, "value": 300},
+      {"temperature": 200, "value": 290},
+      {"temperature": 400, "value": 250},
+      {"temperature": 600, "value": 150},
+      {"temperature": 700, "value": 60},
+      {"temperature": 740, "value": 20},
+      {"temperature": 750, "value": 8},
+      {"temperature": 760, "value": 1.0},
+      {"temperature": 800, "value": 1.0},
+      {"temperature": 1000, "value": 1.0}
+    ],
+    "unit": "dimensionless",
+    "temperature_unit": "degC"
+  }
+}

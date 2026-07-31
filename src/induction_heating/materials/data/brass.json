@@ -1,0 +1,19 @@
+{
+  "name": "Brass (70/30 Cartridge)",
+  "category": "brass",
+  "density": 8530,
+  "curie_temperature": null,
+  "resistivity": {
+    "data": [
+      {"temperature": 20, "value": 6.20e-8},
+      {"temperature": 100, "value": 7.80e-8},
+      {"temperature": 200, "value": 9.20e-8},
+      {"temperature": 300, "value": 1.05e-7},
+      {"temperature": 400, "value": 1.15e-7},
+      {"temperature": 500, "value": 1.20e-7}
+    ],
+    "unit": "ohm*m",
+    "temperature_unit": "degC"
+  },
+  "relative_permeability": null
+}
