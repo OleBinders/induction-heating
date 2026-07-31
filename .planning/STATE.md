@@ -1,7 +1,7 @@
 # State: Induction Heating Simulator
 
-**Current Phase:** Phase 2 — Electromagnetic Calculation Engine
-**Current Status:** Phase 2 planning complete, ready for execution
+**Current Phase:** Phase 3 — Temperature-Dependent Properties & Curie Transition
+**Current Status:** Phase 2 complete, ready for Phase 3
 **Last Updated:** 2026-07-30
 
 ## Project Reference
@@ -10,15 +10,15 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 
 **Core value:** Accurately predict induction heating behavior for surface hardening and brazing applications using analytical methods with temperature-dependent material properties.
 
-**Current focus:** Phase 2 — Electromagnetic Calculation Engine
+**Current focus:** Phase 3 — Temperature-Dependent Properties & Curie Transition
 
 ## Phase State
 
 | Phase | Status |
 |-------|--------|
 | 1. Project Foundation | Complete (35 tests pass) |
-| 2. Electromagnetic Engine | Ready to execute (3 plans) |
-| 3. Curie Transition | Pending |
+| 2. Electromagnetic Engine | Complete (111 tests pass) |
+| 3. Curie Transition | Ready to plan |
 | 4. GUI Framework | Pending |
 | 5. Cross-Section Visualization | Pending |
 | 6. Results & Export | Pending |
@@ -36,9 +36,11 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 - CubicSpline for resistivity interpolation, PchipInterpolator for permeability
 - Partial name matching for material lookup
 - Finite solenoid B-field using elliptic integrals (Callaghan & Maslen NASA TN D-465)
+- Carlson symmetric forms (elliprf, elliprj) for Π(n,m) — scipy lacks ellippi
 - Skin depth: δ = √(2ρ/(ωμ))
-- Eddy current: exponential decay for a/δ > 4, Bessel function for a/δ ≤ 4
+- Eddy current: exponential decay for a/δ > 4, Kelvin functions for a/δ ≤ 4
+- Trapezoidal integration for total power
 
 ## Next Action
 
-Run `/gsd-execute-phase 2` to execute Phase 2: Electromagnetic Calculation Engine.
+Run `/gsd-plan-phase 3` to create detailed plan for Phase 3: Temperature-Dependent Properties & Curie Transition.
