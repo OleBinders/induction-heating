@@ -1,7 +1,7 @@
 # State: Induction Heating Simulator
 
 **Current Phase:** Phase 6 — Results Display & Export
-**Current Status:** Phase 5 complete, ready for Phase 6
+**Current Status:** Phase 6 planning complete, ready for execution
 **Last Updated:** 2026-07-30
 
 ## Project Reference
@@ -21,7 +21,7 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 | 3. Curie Transition | Complete (159 tests pass) |
 | 4. GUI Framework | Complete (201 tests pass) |
 | 5. Cross-Section Visualization | Complete (216 tests pass) |
-| 6. Results & Export | Ready to plan |
+| 6. Results & Export | Ready to execute (2 plans) |
 | 7. Validation & Testing | Pending |
 
 ## Active Decisions
@@ -51,4 +51,4 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 
 ## Next Action
 
-Run `/gsd-plan-phase 6` to create detailed plan for Phase 6: Results Display & Export.
+Run `/gsd-execute-phase 6` to execute Phase 6: Results Display & Export.
