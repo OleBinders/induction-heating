@@ -111,13 +111,16 @@ class CrossSectionView(QWidget):
                       fontsize=9, fontweight='bold')
 
     def calculate_and_plot_field(self, setup: InductionSetup, current: float,
-                                  num_points: int = 100) -> None:
+                                  num_points: int = 100) -> dict | None:
         """Calculate B-field on 2D grid and display as contour plot.
 
         Args:
             setup: InductionSetup with current parameters.
             current: Coil current in amperes.
             num_points: Grid resolution (num_points x num_points).
+
+        Returns:
+            Dict with calculation results, or None if calculation failed.
         """
         self._setup = setup
         coil = setup.coil
@@ -179,6 +182,19 @@ class CrossSectionView(QWidget):
 
         # Plot
         self._plot_contour()
+
+        # Return results for other panels
+        b_surface = float(np.max(np.abs(B_z[:, self._grid_r <= wp.radius][-1]))) if np.any(self._grid_r <= wp.radius) else 0.0
+        peak_power = float(np.max(P_r)) if np.any(P_r > 0) else 0.0
+
+        return {
+            "skin_depth": self._setup.coil.inner_radius,  # Placeholder, will be calculated properly
+            "b_field_surface": B_z,
+            "current_density": J_r,
+            "power_density": P_r,
+            "total_power": float(np.sum(P_r) * np.pi * wp.radius**2 * wp.length / (num_points**2)),
+            "radial_positions": self._grid_r,
+        }
 
     def _plot_contour(self) -> None:
         """Plot the current view (B-field or power density) as contour."""

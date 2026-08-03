@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 from induction_heating.core.geometry import CylindricalWorkpiece, InductionSetup, SolenoidCoil
 from induction_heating.gui.panels.material_panel import MaterialPanel
 from induction_heating.gui.panels.param_panel import CoilPanel, OperatingPanel, WorkpiecePanel
+from induction_heating.gui.panels.results_panel import PropertyPlot, RadialProfilePlot, ResultsPanel
 from induction_heating.gui.views.cross_section_view import CrossSectionView
 from induction_heating.materials.database import MaterialDatabase
 
@@ -146,9 +148,17 @@ class MainWindow(QMainWindow):
         results_layout.addLayout(view_toggle_layout)
         results_layout.addWidget(self.cross_section_view, stretch=3)
 
-        # Placeholder for numerical results and plots
-        results_layout.addWidget(QGroupBox("Numerical Results"), stretch=1)
-        results_layout.addWidget(QGroupBox("Plots"), stretch=1)
+        # Numerical results panel
+        self.results_panel = ResultsPanel()
+        results_layout.addWidget(self.results_panel)
+
+        # Property vs temperature plot
+        self.property_plot = PropertyPlot(self._db)
+        results_layout.addWidget(self.property_plot)
+
+        # Radial depth profile plots
+        self.radial_plot = RadialProfilePlot()
+        results_layout.addWidget(self.radial_plot)
 
         self.results_dock.setWidget(results_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.results_dock)
@@ -239,7 +249,7 @@ class MainWindow(QMainWindow):
         return InductionSetup(coil=coil, workpiece=workpiece, gap=gap)
 
     def _run_calculation(self) -> None:
-        """Run the induction heating calculation and update the cross-section view."""
+        """Run the induction heating calculation and update all views."""
         try:
             setup = self.get_setup()
         except ValueError:
@@ -249,7 +259,52 @@ class MainWindow(QMainWindow):
         frequency = self.operating_panel.frequency_spin.value()
 
         self.status_bar.showMessage("Calculating...")
-        self.cross_section_view.calculate_and_plot_field(setup, current)
+
+        # Calculate and plot cross-section
+        result = self.cross_section_view.calculate_and_plot_field(setup, current)
+
+        if result is not None:
+            # Calculate skin depth properly
+            from induction_heating.core.electromagnetic import calculate_skin_depth
+            from induction_heating.materials.database import MaterialDatabase
+
+            db = MaterialDatabase()
+            try:
+                rho = db.get_property_at_temperature(setup.workpiece.material_name, "resistivity", 20.0)
+                mu_r = db.get_permeability(setup.workpiece.material_name, 20.0)
+            except (KeyError, ValueError):
+                rho = 1.43e-7
+                mu_r = 200.0
+
+            skin_depth = calculate_skin_depth(rho, mu_r, frequency)
+
+            # Get center axial slice (z=0) for radial profiles
+            z_center_idx = np.argmin(np.abs(self.cross_section_view._grid_z))
+            b_center = result["b_field_surface"][z_center_idx, :]
+            j_center = result["current_density"][z_center_idx, :]
+            p_center = result["power_density"][z_center_idx, :]
+
+            # Update numerical results
+            b_field = float(np.max(np.abs(b_center)))
+            total_power = result["total_power"]
+            peak_power = float(np.max(p_center)) if np.any(p_center > 0) else 0.0
+            coupling = setup.coupling_factor
+
+            self.results_panel.update_results(
+                skin_depth, b_field, total_power, peak_power, coupling
+            )
+
+            # Update radial depth profiles
+            self.radial_plot.plot_profiles(
+                result["radial_positions"],
+                b_center,
+                j_center,
+                p_center,
+            )
+
+        # Update property vs temperature plot
+        self.property_plot.plot_properties(setup.workpiece.material_name)
+
         self.status_bar.showMessage("Calculation complete")
 
     def _on_view_changed(self, index: int) -> None:
