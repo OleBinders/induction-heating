@@ -9,7 +9,8 @@
       {"temperature": 100, "value": 2.28e-8},
       {"temperature": 200, "value": 2.95e-8},
       {"temperature": 400, "value": 3.85e-8},
-      {"temperature": 600, "value": 4.50e-8},
+      {"temperature": 500, "value": 4.50e-8},
+      {"temperature": 600, "value": 4.80e-8},
       {"temperature": 800, "value": 5.10e-8},
       {"temperature": 1000, "value": 5.60e-8}
     ],
