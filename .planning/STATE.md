@@ -1,7 +1,7 @@
 # State: Induction Heating Simulator
 
 **Current Phase:** Phase 7 — Validation & Testing
-**Current Status:** Phase 6 complete, ready for Phase 7
+**Current Status:** Phase 7 planning complete, ready for execution
 **Last Updated:** 2026-07-30
 
 ## Project Reference
@@ -22,7 +22,7 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 | 4. GUI Framework | Complete (201 tests pass) |
 | 5. Cross-Section Visualization | Complete (216 tests pass) |
 | 6. Results & Export | Complete (238 tests pass) |
-| 7. Validation & Testing | Ready to plan |
+| 7. Validation & Testing | Ready to execute (2 plans) |
 
 ## Active Decisions
 
@@ -49,7 +49,8 @@ See: .planning/PROJECT.md (updated 2026-07-30 after initialization)
 - viridis colormap for B-field, plasma for power density
 - NavigationToolbar2QT for pan/zoom
 - CSV export for calculation data, JSON for simulation state
+- Validation tolerances: ±2% skin depth, ±5% material properties, ±1% B-field
 
 ## Next Action
 
-Run `/gsd-plan-phase 7` to create detailed plan for Phase 7: Validation & Testing.
+Run `/gsd-execute-phase 7` to execute Phase 7: Validation & Testing.
