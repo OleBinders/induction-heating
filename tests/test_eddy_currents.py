@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -11,8 +13,10 @@ from induction_heating.core.eddy_currents import (
     power_density,
     total_power,
 )
+from induction_heating.core.electromagnetic import calculate_skin_depth
 from induction_heating.core.geometry import InductionSetup, SolenoidCoil, CylindricalWorkpiece
 from induction_heating.materials.database import MaterialDatabase
+from induction_heating.utils.constants import mu_0
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +55,7 @@ class TestEddyCurrentDensity:
     """Test eddy current density distribution."""
 
     def test_surface_value(self) -> None:
-        """At surface (r=a), J ≈ J_surface."""
+        """At surface (r=a), J == J_surface exactly, by construction."""
         b_surf = 0.01  # 10 mT
         f = 10e3
         rho = 1.43e-7
@@ -60,11 +64,11 @@ class TestEddyCurrentDensity:
         r = np.array([a])
 
         j = eddy_current_density(b_surf, f, rho, mu_r, a, r)
-        # J_surface = ω * B * a / (2ρ)
-        import math
-        omega = 2 * math.pi * f
-        j_surface = omega * b_surf * a / (2 * rho)
-        assert j[0] == pytest.approx(j_surface, rel=0.1)
+        # J_surface = H_surface * sqrt(2) / delta, H_surface = B_surface / mu
+        delta = calculate_skin_depth(rho, mu_r, f)
+        h_surface = b_surf / (mu_0() * mu_r)
+        j_surface = h_surface * math.sqrt(2.0) / delta
+        assert j[0] == pytest.approx(j_surface, rel=1e-6)
 
     def test_center_less_than_surface(self) -> None:
         """At center (r=0), J < J_surface (skin effect)."""
@@ -94,19 +98,18 @@ class TestEddyCurrentDensity:
         assert j[-1] > j[0]  # surface > center
 
     def test_uniform_thin_workpiece(self) -> None:
-        """For a/δ ≤ 4, J is more uniform across cross-section."""
+        """A thinner workpiece (smaller a/δ) shows more uniform J than a thick one."""
         b_surf = 0.01
         f = 10e3
         rho = 1.43e-7
         mu_r = 1.0  # Non-magnetic, larger skin depth
-        a = 0.005  # Small radius
 
-        r = np.linspace(0, a, 10)
-        j = eddy_current_density(b_surf, f, rho, mu_r, a, r)
+        def variation(a: float) -> float:
+            r = np.linspace(0, a, 10)
+            j = eddy_current_density(b_surf, f, rho, mu_r, a, r)
+            return (j[-1] - j[0]) / j[-1]
 
-        # Variation should be smaller for thin workpiece
-        variation = (j[-1] - j[0]) / j[-1]
-        assert variation < 0.5  # Less than 50% variation
+        assert variation(0.002) < variation(0.020)
 
     def test_density_increases_with_frequency(self) -> None:
         """Higher frequency → higher current density."""
@@ -131,6 +134,34 @@ class TestEddyCurrentDensity:
         j_low = eddy_current_density(0.005, f, rho, mu_r, a, r)
         j_high = eddy_current_density(0.010, f, rho, mu_r, a, r)
         assert j_high[0] > j_low[0]
+
+
+class TestEddyCurrentRegimeContinuity:
+    """Regression test for the a/δ regime-switch discontinuity.
+
+    Before the argument-scaling fix, total power computed just below vs. just
+    above the switch threshold differed by ~63% for identical physical inputs.
+    """
+
+    def test_total_power_continuous_across_switch(self) -> None:
+        """Total power must not jump sharply across the a/δ=50 threshold."""
+        b_surf = 0.01
+        f = 10e3
+        rho = 1.43e-7
+        mu_r = 1.0
+        length = 0.08
+
+        delta = calculate_skin_depth(rho, mu_r, f)
+
+        num_points = 500
+        powers = []
+        for ratio in (49.0, 51.0):
+            a = delta * ratio
+            r = np.linspace(0, a, num_points)
+            j = eddy_current_density(b_surf, f, rho, mu_r, a, r)
+            powers.append(total_power(j, rho, a, length, num_points=num_points))
+
+        assert powers[1] == pytest.approx(powers[0], rel=0.05)
 
 
 # ---------------------------------------------------------------------------

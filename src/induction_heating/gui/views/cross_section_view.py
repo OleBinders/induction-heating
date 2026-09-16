@@ -29,6 +29,7 @@ class CrossSectionView(QWidget):
         self._setup_ui()
         self._setup = None
         self._b_field_data = None
+        self._current_density_data = None
         self._power_density_data = None
         self._grid_r = None
         self._grid_z = None
@@ -111,16 +112,27 @@ class CrossSectionView(QWidget):
                       fontsize=9, fontweight='bold')
 
     def calculate_and_plot_field(self, setup: InductionSetup, current: float,
-                                  num_points: int = 100) -> dict | None:
+                                  frequency: float = 10000.0, temperature: float = 20.0,
+                                  num_points: int = 100, material_db=None) -> dict | None:
         """Calculate B-field on 2D grid and display as contour plot.
+
+        The B-field map is computed directly here (an on-axis approximation used
+        purely for the visualization). The eddy-current/power numbers are not
+        reimplemented here -- they come from the tested
+        ``eddy_currents.calculate_induction_heating`` pipeline, so the plot and
+        the numerical results panel always agree with each other and with the
+        test suite.
 
         Args:
             setup: InductionSetup with current parameters.
             current: Coil current in amperes.
+            frequency: Operating frequency in Hz.
+            temperature: Workpiece temperature in °C, for material property lookup.
             num_points: Grid resolution (num_points x num_points).
+            material_db: Material database to use. Creates a default if None.
 
         Returns:
-            Dict with calculation results, or None if calculation failed.
+            Dict with calculation results, or None if the material/inputs are invalid.
         """
         self._setup = setup
         coil = setup.coil
@@ -133,67 +145,65 @@ class CrossSectionView(QWidget):
         self._grid_z = np.linspace(-z_max, z_max, num_points)
         RR, ZZ = np.meshgrid(self._grid_r, self._grid_z)
 
-        # Calculate B-field on grid (on-axis approximation for each R column)
-        # For simplicity, use on-axis formula at each Z position
-        # This gives the axial component B_z
+        # B-field map for visualization (on-axis approximation at each Z position).
+        # Outside the workpiece this is an illustrative falloff, not a physical
+        # off-axis solution -- solenoid_b_field_off_axis exists for that, but
+        # isn't needed for the eddy-current physics below.
         B_z = np.zeros_like(RR)
         for i, r in enumerate(self._grid_r):
-            # For each radial position, calculate B-field
-            # Using the on-axis formula as approximation (valid near axis)
+            b_axis = solenoid_b_field_on_axis(coil, current, ZZ[:, i])
             if r <= wp.radius:
-                # Inside workpiece: use on-axis formula
-                B_z[:, i] = solenoid_b_field_on_axis(coil, current, ZZ[:, i])
+                B_z[:, i] = b_axis
             else:
-                # Outside workpiece: field drops off
-                B_z[:, i] = solenoid_b_field_on_axis(coil, current, ZZ[:, i]) * (wp.radius / max(r, 1e-10))
+                B_z[:, i] = b_axis * (wp.radius / max(r, 1e-10))
 
         self._b_field_data = B_z
 
-        # Calculate power density
-        from induction_heating.core.eddy_currents import (
-            eddy_current_density,
-            power_density,
-        )
+        # Authoritative eddy-current/power physics via the tested pipeline.
+        from induction_heating.core.eddy_currents import calculate_induction_heating
         from induction_heating.materials.database import MaterialDatabase
 
-        db = MaterialDatabase()
+        db = material_db or MaterialDatabase()
         try:
-            rho = db.get_property_at_temperature(wp.material_name, "resistivity", 20.0)
-            mu_r = db.get_permeability(wp.material_name, 20.0)
+            pipeline = calculate_induction_heating(
+                setup, current, frequency, temperature=temperature, material_db=db,
+            )
         except (KeyError, ValueError):
-            rho = 1.43e-7
-            mu_r = 200.0
+            self._power_density_data = np.zeros_like(RR)
+            self._current_density_data = np.zeros_like(RR)
+            return None
 
-        # Calculate eddy current density at each radial position inside workpiece
-        J_r = np.zeros_like(RR)
-        P_r = np.zeros_like(RR)
-        for i, r in enumerate(self._grid_r):
-            if r <= wp.radius:
-                B_surf = float(np.max(np.abs(B_z[:, i])))
-                if B_surf > 0:
-                    j_vals = eddy_current_density(
-                        B_surf, 10000, rho, mu_r, wp.radius,
-                        np.array([r])
-                    )
-                    J_r[:, i] = j_vals[0]
-                    P_r[:, i] = power_density(j_vals, rho)[0]
+        r_profile = pipeline["radial_positions"]
+        j_profile = pipeline["current_density"]
+        p_profile = pipeline["power_density"]
 
+        # Interpolate the radial profile onto the visualization grid and
+        # broadcast across z (the analytical model has no axial dependence).
+        j_grid = np.interp(self._grid_r, r_profile, j_profile, right=0.0)
+        p_grid = np.interp(self._grid_r, r_profile, p_profile, right=0.0)
+        outside = self._grid_r > wp.radius
+        j_grid[outside] = 0.0
+        p_grid[outside] = 0.0
+
+        J_r = np.tile(j_grid, (num_points, 1))
+        P_r = np.tile(p_grid, (num_points, 1))
+        self._current_density_data = J_r
         self._power_density_data = P_r
 
         # Plot
         self._plot_contour()
 
-        # Return results for other panels
-        b_surface = float(np.max(np.abs(B_z[:, self._grid_r <= wp.radius][-1]))) if np.any(self._grid_r <= wp.radius) else 0.0
-        peak_power = float(np.max(P_r)) if np.any(P_r > 0) else 0.0
+        peak_power_density = float(np.max(p_profile)) if p_profile.size else 0.0
 
         return {
-            "skin_depth": self._setup.coil.inner_radius,  # Placeholder, will be calculated properly
+            "skin_depth": pipeline["skin_depth"],
             "b_field_surface": B_z,
             "current_density": J_r,
             "power_density": P_r,
-            "total_power": float(np.sum(P_r) * np.pi * wp.radius**2 * wp.length / (num_points**2)),
+            "total_power": pipeline["total_power"],
+            "peak_power_density": peak_power_density,
             "radial_positions": self._grid_r,
+            "snapshot": pipeline["snapshot"],
         }
 
     def _plot_contour(self) -> None:

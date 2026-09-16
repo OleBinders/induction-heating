@@ -30,8 +30,11 @@ def eddy_current_density(
 ) -> np.ndarray:
     """Calculate eddy current density distribution in a cylindrical workpiece.
 
-    Uses the exponential decay approximation for thick workpieces (a/δ > 4)
-    and the Bessel function solution for thinner workpieces (a/δ ≤ 4).
+    Uses the exact Kelvin-function (Lord Kelvin's classical) solution for a
+    solid cylinder in a uniform axial AC field, for a/δ ≤ 50. Above that ratio
+    it switches to the exponential thick-workpiece approximation, purely to
+    avoid floating-point overflow in the Kelvin functions -- the two agree to
+    within ~1% at a/δ = 50, so the switch introduces no visible discontinuity.
 
     Args:
         b_surface: Magnetic flux density at workpiece surface (T).
@@ -53,30 +56,29 @@ def eddy_current_density(
     # Determine regime
     ratio = a / delta
 
-    # Surface current density approximation
-    # J_surface ≈ ω * B_surface * a / (2 * ρ) for a >> δ
-    omega = 2.0 * math.pi * frequency
-    j_surface = omega * b_surface * a / (2.0 * resistivity)
+    # Surface current density from the standard skin-effect boundary condition:
+    # J_surface = H_surface * √2 / δ, where H_surface = B_surface / μ. (This is
+    # the same result as for a semi-infinite plane conductor: |dH/dx| at the
+    # surface for H(x) = H0·exp(-(1+j)x/δ).)
+    mu = mu_0() * relative_permeability
+    h_surface = b_surface / mu
+    j_surface = h_surface * math.sqrt(2.0) / delta
 
-    if ratio > 4.0:
+    if ratio > 50.0:
         # Thick workpiece: exponential decay from surface
         # J(r) = J_surface * exp(-(a - r) / δ)
         j_r = j_surface * np.exp(-(a - r) / delta)
     else:
-        # Thin workpiece: Bessel function solution
-        # J(r) = J_surface * J₀(kr) / J₀(ka) where k = (1-j)/δ
-        # For magnitude: |J(r)| = |J_surface| * |ber₀(r/δ) + j*bei₀(r/δ)| / |ber₀(a/δ) + j*bei₀(a/δ)|
-        # Simplified: use magnitude of J₀ with complex argument
-        k_mag = math.sqrt(2.0) / delta  # |k| = √2/δ
-        # Use Kelvin functions for magnitude: |J₀(j^(3/2) * x)| = √(ber₀²(x) + bei₀²(x))
-        # For simplicity, use the approximation |J₀(kr)| ≈ exp(-r/δ) for large arguments
-        # and the exact Bessel function for small arguments
-        x_r = r / delta
-        x_a = a / delta
-
-        # Kelvin functions ber and bei: kelvin(x)[0] = ber(x) + j*bei(x)
-        kelvin_r = special.kelvin(x_r)
-        kelvin_a = special.kelvin(x_a)
+        # Exact solution: |J(r)| = J_surface * |ber(qr) + j·bei(qr)| / |ber(qa) + j·bei(qa)|
+        # with q = √2/δ -- this is Kelvin's original (1887) eddy-current argument
+        # convention, m = a·√(ωμ/ρ) = √2·a/δ. Using r/δ instead of √2·r/δ here
+        # (an easy mistake, since scipy's kelvin() takes a bare argument) changes
+        # the effective decay rate and desyncs this branch from the exponential
+        # one above -- that was the cause of a ~63% total-power discontinuity
+        # right at the regime switch.
+        q = math.sqrt(2.0) / delta
+        kelvin_r = special.kelvin(q * r)
+        kelvin_a = special.kelvin(q * a)
         ber_r, bei_r = kelvin_r[0].real, kelvin_r[0].imag
         ber_a, bei_a = kelvin_a[0].real, kelvin_a[0].imag
 

@@ -8,12 +8,14 @@ from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
     QComboBox,
     QDockWidget,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenuBar,
+    QMessageBox,
     QScrollArea,
     QStatusBar,
     QToolBar,
@@ -26,6 +28,7 @@ from induction_heating.gui.panels.material_panel import MaterialPanel
 from induction_heating.gui.panels.param_panel import CoilPanel, OperatingPanel, WorkpiecePanel
 from induction_heating.gui.panels.results_panel import PropertyPlot, RadialProfilePlot, ResultsPanel
 from induction_heating.gui.views.cross_section_view import CrossSectionView
+from induction_heating.io.export import export_csv, load_simulation, save_simulation
 from induction_heating.materials.database import MaterialDatabase
 
 
@@ -179,6 +182,11 @@ class MainWindow(QMainWindow):
         # Run button
         self.run_action.triggered.connect(self._run_calculation)
 
+        # Save / Load / Export
+        self.save_action.triggered.connect(self._save_simulation)
+        self.load_action.triggered.connect(self._load_simulation)
+        self.export_action.triggered.connect(self._export_results)
+
         # View toggle
         self.view_combo.currentIndexChanged.connect(self._on_view_changed)
 
@@ -257,26 +265,19 @@ class MainWindow(QMainWindow):
 
         current = self.operating_panel.current_spin.value()
         frequency = self.operating_panel.frequency_spin.value()
+        temperature = self.operating_panel.temperature_spin.value()
 
         self.status_bar.showMessage("Calculating...")
 
-        # Calculate and plot cross-section
-        result = self.cross_section_view.calculate_and_plot_field(setup, current)
+        # Calculate and plot cross-section. All eddy-current/power numbers come
+        # from the tested calculate_induction_heating() pipeline -- see
+        # CrossSectionView.calculate_and_plot_field.
+        result = self.cross_section_view.calculate_and_plot_field(
+            setup, current, frequency=frequency, temperature=temperature, material_db=self._db,
+        )
 
         if result is not None:
-            # Calculate skin depth properly
-            from induction_heating.core.electromagnetic import calculate_skin_depth
-            from induction_heating.materials.database import MaterialDatabase
-
-            db = MaterialDatabase()
-            try:
-                rho = db.get_property_at_temperature(setup.workpiece.material_name, "resistivity", 20.0)
-                mu_r = db.get_permeability(setup.workpiece.material_name, 20.0)
-            except (KeyError, ValueError):
-                rho = 1.43e-7
-                mu_r = 200.0
-
-            skin_depth = calculate_skin_depth(rho, mu_r, frequency)
+            skin_depth = result["skin_depth"]
 
             # Get center axial slice (z=0) for radial profiles
             z_center_idx = np.argmin(np.abs(self.cross_section_view._grid_z))
@@ -287,7 +288,7 @@ class MainWindow(QMainWindow):
             # Update numerical results
             b_field = float(np.max(np.abs(b_center)))
             total_power = result["total_power"]
-            peak_power = float(np.max(p_center)) if np.any(p_center > 0) else 0.0
+            peak_power = result["peak_power_density"]
             coupling = setup.coupling_factor
 
             self.results_panel.update_results(
@@ -301,11 +302,88 @@ class MainWindow(QMainWindow):
                 j_center,
                 p_center,
             )
+        else:
+            self.results_panel.clear()
 
         # Update property vs temperature plot
         self.property_plot.plot_properties(setup.workpiece.material_name)
 
-        self.status_bar.showMessage("Calculation complete")
+        self.status_bar.showMessage("Calculation complete" if result is not None else "Calculation failed")
+
+    def _save_simulation(self) -> None:
+        """Save the current coil/workpiece/operating parameters to a JSON file."""
+        try:
+            setup = self.get_setup()
+        except ValueError:
+            QMessageBox.warning(self, "Save Simulation", "Cannot save: current inputs are invalid.")
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(self, "Save Simulation", "", "JSON Files (*.json)")
+        if not filepath:
+            return
+
+        save_simulation(
+            filepath,
+            setup,
+            frequency=self.operating_panel.frequency_spin.value(),
+            current=self.operating_panel.current_spin.value(),
+            temperature=self.operating_panel.temperature_spin.value(),
+        )
+        self.status_bar.showMessage(f"Saved to {filepath}")
+
+    def _load_simulation(self) -> None:
+        """Load coil/workpiece/operating parameters from a JSON file."""
+        filepath, _ = QFileDialog.getOpenFileName(self, "Load Simulation", "", "JSON Files (*.json)")
+        if not filepath:
+            return
+
+        try:
+            state = load_simulation(filepath)
+        except (FileNotFoundError, ValueError) as exc:
+            QMessageBox.warning(self, "Load Simulation", f"Could not load simulation:\n{exc}")
+            return
+
+        coil = state["coil"]
+        self.coil_panel.inner_radius_spin.setValue(coil["inner_radius"])
+        self.coil_panel.outer_radius_spin.setValue(coil["outer_radius"])
+        self.coil_panel.length_spin.setValue(coil["length"])
+        self.coil_panel.turns_spin.setValue(coil["turns"])
+        self.coil_panel.wire_diameter_spin.setValue(coil["wire_diameter"])
+
+        workpiece = state["workpiece"]
+        self.workpiece_panel.radius_spin.setValue(workpiece["radius"])
+        self.workpiece_panel.length_spin.setValue(workpiece["length"])
+        material_idx = self.material_panel.material_combo.findText(workpiece["material_name"])
+        if material_idx >= 0:
+            self.material_panel.material_combo.setCurrentIndex(material_idx)
+
+        operating = state["operating"]
+        self.operating_panel.frequency_spin.setValue(operating["frequency"])
+        self.operating_panel.current_spin.setValue(operating["current"])
+        self.operating_panel.temperature_spin.setValue(operating["temperature"])
+
+        self.status_bar.showMessage(f"Loaded from {filepath}")
+
+    def _export_results(self) -> None:
+        """Export the last calculation's radial profile (r, B, J, P) to CSV."""
+        view = self.cross_section_view
+        if view._setup is None or view._power_density_data is None:
+            QMessageBox.information(self, "Export Results", "Run a calculation first.")
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(self, "Export Results", "", "CSV Files (*.csv)")
+        if not filepath:
+            return
+
+        z_center_idx = int(np.argmin(np.abs(view._grid_z)))
+        export_csv(
+            filepath,
+            view._grid_r,
+            view._b_field_data[z_center_idx, :],
+            view._current_density_data[z_center_idx, :],
+            view._power_density_data[z_center_idx, :],
+        )
+        self.status_bar.showMessage(f"Exported to {filepath}")
 
     def _on_view_changed(self, index: int) -> None:
         """Handle view toggle change."""

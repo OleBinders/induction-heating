@@ -82,6 +82,88 @@ class TestFullWorkflow:
         assert window.cross_section_view._current_view == "b_field"
 
 
+class TestToolbarActionsWired:
+    """Test that Save/Load/Export toolbar actions are actually connected.
+
+    These trigger the real QAction (not the underlying save_simulation/
+    load_simulation functions directly), so they catch the case where the
+    action exists but has no .triggered handler.
+    """
+
+    def test_save_action_triggers_file_dialog_and_writes_file(
+        self, window: MainWindow, qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Triggering Save opens a file dialog and writes the simulation JSON."""
+        from PySide6.QtWidgets import QFileDialog
+
+        filepath = tmp_path / "via_action.json"
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(filepath), ""))
+        )
+
+        window.save_action.trigger()
+
+        assert filepath.exists()
+        state = json.loads(filepath.read_text())
+        assert state["coil"]["inner_radius"] == pytest.approx(
+            window.coil_panel.inner_radius_spin.value()
+        )
+
+    def test_load_action_triggers_file_dialog_and_populates_panels(
+        self, window: MainWindow, qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Triggering Load opens a file dialog and updates the panels."""
+        from PySide6.QtWidgets import QFileDialog
+
+        filepath = tmp_path / "via_action_load.json"
+        setup = window.get_setup()
+        save_simulation(filepath, setup, frequency=42000, current=77, temperature=20.0)
+
+        monkeypatch.setattr(
+            QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(filepath), ""))
+        )
+
+        window.operating_panel.frequency_spin.setValue(10000)
+        window.load_action.trigger()
+
+        assert window.operating_panel.frequency_spin.value() == pytest.approx(42000)
+        assert window.operating_panel.current_spin.value() == pytest.approx(77)
+
+    def test_export_action_triggers_file_dialog_and_writes_csv(
+        self, window: MainWindow, qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Triggering Export (after a run) writes a CSV of the radial profile."""
+        from PySide6.QtWidgets import QFileDialog
+
+        window.run_action.trigger()
+
+        filepath = tmp_path / "via_action.csv"
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(filepath), ""))
+        )
+
+        window.export_action.trigger()
+
+        assert filepath.exists()
+        assert "Radius" in filepath.read_text()
+
+    def test_export_action_without_a_run_shows_message(
+        self, window: MainWindow, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Triggering Export before any Run informs the user instead of crashing."""
+        from PySide6.QtWidgets import QMessageBox
+
+        called = {}
+        monkeypatch.setattr(
+            QMessageBox, "information",
+            staticmethod(lambda *a, **k: called.setdefault("shown", True)),
+        )
+
+        window.export_action.trigger()
+
+        assert called.get("shown") is True
+
+
 class TestSaveLoadWorkflow:
     """Test save/load simulation workflow."""
 

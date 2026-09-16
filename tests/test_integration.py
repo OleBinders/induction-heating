@@ -85,12 +85,12 @@ class TestPipelineIntegration:
 
         # Find indices inside workpiece
         inside = r <= wp_radius
-        if np.any(inside):
-            p_inside = p[inside]
-            r_inside = r[inside]
-            # Peak should be near surface (largest r)
-            peak_idx = np.argmax(p_inside)
-            assert r_inside[peak_idx] > np.mean(r_inside)
+        assert np.any(inside), "radial_positions should always include points inside the workpiece"
+        p_inside = p[inside]
+        r_inside = r[inside]
+        # Peak should be near surface (largest r)
+        peak_idx = np.argmax(p_inside)
+        assert r_inside[peak_idx] > np.mean(r_inside)
 
     def test_permeability_drops_at_curie(self, steel_setup: InductionSetup, db: MaterialDatabase) -> None:
         """Permeability drops to ~1.0 at Curie point."""

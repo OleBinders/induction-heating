@@ -21,10 +21,17 @@ class PropertySnapshot:
 
     Attributes:
         temperature: Temperature in °C.
-        resistivity: Electrical resistivity in Ω·m.
+        resistivity: Electrical resistivity in Ω·m. Measured, temperature-interpolated
+            data from the material's JSON file.
         relative_permeability: Relative magnetic permeability (dimensionless, ≥ 1.0).
-        specific_heat: Specific heat capacity in J/(kg·K).
-        thermal_conductivity: Thermal conductivity in W/(m·K).
+            Measured, temperature-interpolated data (with a Curie-transition model
+            for extrapolation beyond the data range).
+        specific_heat: Specific heat capacity in J/(kg·K). NOT measured data -- no
+            material JSON currently defines this property, so this is always a
+            per-category engineering estimate (see _get_specific_heat). Not used by
+            any calculation in this codebase today; present for future thermal work.
+        thermal_conductivity: Thermal conductivity in W/(m·K). Same caveat as
+            specific_heat: always an estimate, not measured data, currently unused.
     """
 
     temperature: float
@@ -79,8 +86,9 @@ class PropertySnapshot:
             material_name, temperature
         )
 
-        # Specific heat and thermal conductivity: use defaults if not available
-        # These will be extended when data files include these properties
+        # Specific heat and thermal conductivity: no material JSON file currently
+        # defines these properties, so these are always per-category engineering
+        # estimates below, not measured data. See PropertySnapshot's docstring.
         specific_heat = _get_specific_heat(material_db, material_name, temperature)
         thermal_conductivity = _get_thermal_conductivity(
             material_db, material_name, temperature
@@ -98,13 +106,20 @@ class PropertySnapshot:
 def _get_specific_heat(
     material_db: MaterialDatabase, material_name: str, temperature: float
 ) -> float:
-    """Get specific heat at temperature, with fallback defaults."""
+    """Get specific heat at temperature.
+
+    ENGINEERING ESTIMATE, not measured data: no shipped material JSON file
+    defines a "specific_heat" property, so the lookup below always raises and
+    this always falls through to the per-category constants/linear formulas.
+    If a material file is ever extended with real specific-heat data, this
+    function will start using it automatically and this note should be removed.
+    """
     try:
         return material_db.get_property_at_temperature(
             material_name, "specific_heat", temperature
         )
     except (KeyError, ValueError):
-        # Default values for common materials
+        # Rough per-category estimates, not sourced from a specific reference.
         mat = material_db.get_material(material_name)
         if mat.category == "steel":
             # Steel: ~450 J/(kg·K) at 20°C, ~700 J/(kg·K) at 900°C
@@ -121,13 +136,21 @@ def _get_specific_heat(
 def _get_thermal_conductivity(
     material_db: MaterialDatabase, material_name: str, temperature: float
 ) -> float:
-    """Get thermal conductivity at temperature, with fallback defaults."""
+    """Get thermal conductivity at temperature.
+
+    ENGINEERING ESTIMATE, not measured data: no shipped material JSON file
+    defines a "thermal_conductivity" property, so the lookup below always
+    raises and this always falls through to the per-category constants/linear
+    formulas. If a material file is ever extended with real thermal-conductivity
+    data, this function will start using it automatically and this note should
+    be removed.
+    """
     try:
         return material_db.get_property_at_temperature(
             material_name, "thermal_conductivity", temperature
         )
     except (KeyError, ValueError):
-        # Default values for common materials
+        # Rough per-category estimates, not sourced from a specific reference.
         mat = material_db.get_material(material_name)
         if mat.category == "steel":
             # Steel: ~50 W/(m·K) at 20°C, ~25 W/(m·K) at 800°C
