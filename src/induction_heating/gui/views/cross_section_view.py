@@ -9,6 +9,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
+from scipy.interpolate import RegularGridInterpolator
 
 from induction_heating.core.electromagnetic import solenoid_b_field_off_axis
 from induction_heating.core.geometry import InductionSetup
@@ -120,9 +121,13 @@ class CrossSectionView(QWidget):
         everywhere, so it's physically valid both inside and outside the
         workpiece -- not an on-axis approximation with an ad hoc falloff
         stitched on. The eddy-current/power numbers are not reimplemented here
-        -- they come from the tested ``eddy_currents.calculate_induction_heating``
-        pipeline, so the plot and the numerical results panel always agree with
-        each other and with the test suite.
+        -- they come from the tested
+        ``eddy_currents.calculate_induction_heating_2d`` pipeline, so the plot
+        and the numerical results panel always agree with each other and with
+        the test suite. That pipeline computes a real (axial, radial) power
+        grid (see its docstring for the "locally quasi-1D per axial slice"
+        approximation it relies on), which is interpolated here onto this
+        view's visualization grid.
 
         Args:
             setup: InductionSetup with current parameters.
@@ -152,13 +157,15 @@ class CrossSectionView(QWidget):
         _, B_z = solenoid_b_field_off_axis(coil, current, RR, ZZ)
         self._b_field_data = B_z
 
-        # Authoritative eddy-current/power physics via the tested pipeline.
-        from induction_heating.core.eddy_currents import calculate_induction_heating
+        # Authoritative eddy-current/power physics via the tested 2D pipeline
+        # -- real axial variation, not a single radial profile broadcast
+        # uniformly along z.
+        from induction_heating.core.eddy_currents import calculate_induction_heating_2d
         from induction_heating.materials.database import MaterialDatabase
 
         db = material_db or MaterialDatabase()
         try:
-            pipeline = calculate_induction_heating(
+            pipeline = calculate_induction_heating_2d(
                 setup, current, frequency, temperature=temperature, material_db=db,
             )
         except (KeyError, ValueError):
@@ -167,19 +174,28 @@ class CrossSectionView(QWidget):
             return None
 
         r_profile = pipeline["radial_positions"]
-        j_profile = pipeline["current_density"]
-        p_profile = pipeline["power_density"]
+        z_profile = pipeline["axial_positions"]
+        j_profile = pipeline["current_density"]  # shape (n_z, n_r)
+        p_profile = pipeline["power_density"]  # shape (n_z, n_r)
 
-        # Interpolate the radial profile onto the visualization grid and
-        # broadcast across z (the analytical model has no axial dependence).
-        j_grid = np.interp(self._grid_r, r_profile, j_profile, right=0.0)
-        p_grid = np.interp(self._grid_r, r_profile, p_profile, right=0.0)
-        outside = self._grid_r > wp.radius
-        j_grid[outside] = 0.0
-        p_grid[outside] = 0.0
+        # Interpolate the (axial, radial) result grid onto this view's
+        # visualization grid. RegularGridInterpolator (not np.interp, which is
+        # 1D-only) since we now have real axial dependence to preserve.
+        j_interp = RegularGridInterpolator(
+            (z_profile, r_profile), j_profile, bounds_error=False, fill_value=0.0
+        )
+        p_interp = RegularGridInterpolator(
+            (z_profile, r_profile), p_profile, bounds_error=False, fill_value=0.0
+        )
+        query_points = np.stack([ZZ.ravel(), RR.ravel()], axis=-1)
+        J_r = j_interp(query_points).reshape(RR.shape)
+        P_r = p_interp(query_points).reshape(RR.shape)
 
-        J_r = np.tile(j_grid, (num_points, 1))
-        P_r = np.tile(p_grid, (num_points, 1))
+        # Zero out points outside the workpiece radius (same behavior as before).
+        outside = RR > wp.radius
+        J_r[outside] = 0.0
+        P_r[outside] = 0.0
+
         self._current_density_data = J_r
         self._power_density_data = P_r
 

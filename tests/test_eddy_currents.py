@@ -9,9 +9,12 @@ import pytest
 
 from induction_heating.core.eddy_currents import (
     calculate_induction_heating,
+    calculate_induction_heating_2d,
     eddy_current_density,
+    eddy_current_density_2d,
     power_density,
     total_power,
+    total_power_2d,
 )
 from induction_heating.core.electromagnetic import calculate_skin_depth
 from induction_heating.core.geometry import InductionSetup, SolenoidCoil, CylindricalWorkpiece
@@ -382,3 +385,303 @@ class TestCalculationPipeline:
             )
             assert result["total_power"] > 0
             assert result["skin_depth"] > 0
+
+
+# ---------------------------------------------------------------------------
+# 2D (r, z) eddy current density tests
+# ---------------------------------------------------------------------------
+
+class TestEddyCurrentDensity2D:
+    """Test the 2D (z, r) eddy current density grid.
+
+    ``eddy_current_density_2d`` is a "locally quasi-1D per axial slice"
+    approximation (see its docstring) built on top of the already-validated,
+    unmodified 1D ``eddy_current_density``. These tests check basic shape/
+    positivity properties, and -- importantly -- tie the new 2D code back to
+    the existing validated 1D physics via a direct consistency check, rather
+    than only asserting the 2D function against itself.
+    """
+
+    def test_output_shape(self) -> None:
+        """Output shape is (n_z, n_r)."""
+        n_z, n_r = 7, 50
+        b_surface_z = np.full(n_z, 0.01)
+        r = np.linspace(0, 0.020, n_r)
+
+        j_zr = eddy_current_density_2d(
+            b_surface_z=b_surface_z,
+            frequency=10e3,
+            resistivity_z=1.43e-7,
+            relative_permeability_z=200.0,
+            workpiece_radius=0.020,
+            radial_positions=r,
+        )
+        assert j_zr.shape == (n_z, n_r)
+
+    def test_positive(self) -> None:
+        """Current density magnitude is positive everywhere."""
+        b_surface_z = np.array([0.005, 0.008, 0.01, 0.008, 0.005])
+        r = np.linspace(0, 0.020, 30)
+
+        j_zr = eddy_current_density_2d(
+            b_surface_z=b_surface_z,
+            frequency=10e3,
+            resistivity_z=1.43e-7,
+            relative_permeability_z=200.0,
+            workpiece_radius=0.020,
+            radial_positions=r,
+        )
+        assert np.all(j_zr > 0)
+
+    def test_scalar_properties_broadcast_per_slice(self) -> None:
+        """Scalar resistivity/permeability apply uniformly to every slice."""
+        b_surface_z = np.full(5, 0.01)
+        r = np.linspace(0, 0.020, 20)
+
+        j_zr = eddy_current_density_2d(
+            b_surface_z=b_surface_z,
+            frequency=10e3,
+            resistivity_z=1.43e-7,
+            relative_permeability_z=200.0,
+            workpiece_radius=0.020,
+            radial_positions=r,
+        )
+        # Same b_surface at every slice + scalar properties -> every row identical.
+        for i in range(1, j_zr.shape[0]):
+            assert j_zr[i, :] == pytest.approx(j_zr[0, :])
+
+    def test_consistency_with_1d_function_at_matching_slice(self) -> None:
+        """A single axial slice of the 2D function must reproduce the 1D
+        function's output exactly for the same inputs -- the 2D function is
+        just a per-slice loop over the same validated Kelvin-function
+        solution, so there is no room for divergence at a single slice."""
+        b_surf = 0.01
+        f = 10e3
+        rho = 1.43e-7
+        mu_r = 200.0
+        a = 0.020
+        r = np.linspace(0, a, 50)
+
+        j_1d = eddy_current_density(b_surf, f, rho, mu_r, a, r)
+
+        j_2d = eddy_current_density_2d(
+            b_surface_z=np.array([b_surf]),
+            frequency=f,
+            resistivity_z=rho,
+            relative_permeability_z=mu_r,
+            workpiece_radius=a,
+            radial_positions=r,
+        )
+        assert j_2d[0, :] == pytest.approx(j_1d, rel=1e-10)
+
+    def test_consistency_with_1d_pipeline_at_coil_center(
+        self, steel_setup: InductionSetup, db: MaterialDatabase
+    ) -> None:
+        """For a workpiece centered on the coil's axial middle, the 2D
+        pipeline's center-slice power profile should be reasonably close to
+        the 1D pipeline's profile (evaluated at z=0) for the same inputs --
+        both should be probing essentially the same physical field. This
+        ties the new 2D code back to already-validated physics instead of
+        just checking it against itself."""
+        current = 100.0
+        frequency = 10e3
+
+        result_1d = calculate_induction_heating(
+            steel_setup, current, frequency, material_db=db
+        )
+        result_2d = calculate_induction_heating_2d(
+            steel_setup, current, frequency, material_db=db, num_axial_points=41,
+        )
+
+        z_center_idx = int(np.argmin(np.abs(result_2d["axial_positions"])))
+        p_2d_center = result_2d["power_density"][z_center_idx, :]
+        p_1d = power_density(result_1d["current_density"], result_1d["snapshot"].resistivity)
+
+        # Not a tight match (the 2D pipeline uses the true off-axis surface
+        # field, the 1D pipeline uses the on-axis proxy) but should be the
+        # same order of magnitude / broadly consistent shape.
+        assert p_2d_center == pytest.approx(p_1d, rel=0.5)
+
+
+# ---------------------------------------------------------------------------
+# 2D total power integration tests
+# ---------------------------------------------------------------------------
+
+class TestTotalPower2D:
+    """Test the nested radial-then-axial power integration."""
+
+    def test_positive(self) -> None:
+        """Total power is positive."""
+        n_z, n_r = 10, 50
+        r = np.linspace(0, 0.020, n_r)
+        z = np.linspace(-0.04, 0.04, n_z)
+        p_rz = np.full((n_z, n_r), 1e8)
+
+        p_total = total_power_2d(p_rz, r, z)
+        assert p_total > 0
+
+    def test_returns_scalar_float(self) -> None:
+        """Return value is a plain float, not an array."""
+        r = np.linspace(0, 0.020, 20)
+        z = np.linspace(-0.04, 0.04, 5)
+        p_rz = np.full((5, 20), 1e8)
+
+        p_total = total_power_2d(p_rz, r, z)
+        assert isinstance(p_total, float)
+
+    def test_uniform_along_z_matches_1d_total_power_times_length(self) -> None:
+        """If power density is identical at every axial slice, the 2D
+        integral must equal the 1D radial integral scaled by the axial
+        length -- a direct consistency check against the existing,
+        validated ``total_power`` (which scales by workpiece_length)."""
+        a = 0.020
+        length = 0.08
+        n_r = 300
+        n_z = 21
+        r = np.linspace(0, a, n_r)
+        z = np.linspace(-length / 2.0, length / 2.0, n_z)
+
+        b_surf = 0.01
+        f = 10e3
+        rho = 1.43e-7
+        mu_r = 200.0
+        j_r = eddy_current_density(b_surf, f, rho, mu_r, a, r)
+        p_r = power_density(j_r, rho)
+
+        p_rz = np.tile(p_r, (n_z, 1))
+
+        p_2d = total_power_2d(p_rz, r, z)
+        p_1d = total_power(j_r, rho, a, length, num_points=n_r)
+
+        assert p_2d == pytest.approx(p_1d, rel=1e-3)
+
+    def test_scales_with_axial_extent(self) -> None:
+        """Doubling the axial extent (with the same power density
+        everywhere) doubles total power."""
+        r = np.linspace(0, 0.020, 100)
+        p_rz_short = np.full((5, 100), 1e8)
+        p_rz_long = np.full((5, 100), 1e8)
+
+        z_short = np.linspace(-0.02, 0.02, 5)
+        z_long = np.linspace(-0.04, 0.04, 5)
+
+        p_short = total_power_2d(p_rz_short, r, z_short)
+        p_long = total_power_2d(p_rz_long, r, z_long)
+
+        assert p_long == pytest.approx(2.0 * p_short, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# calculate_induction_heating_2d pipeline tests
+# ---------------------------------------------------------------------------
+
+class TestCalculationPipeline2D:
+    """Test the end-to-end 2D induction heating pipeline."""
+
+    def test_pipeline_returns_all_keys(self, steel_setup: InductionSetup, db: MaterialDatabase) -> None:
+        """Pipeline returns all expected keys."""
+        result = calculate_induction_heating_2d(
+            steel_setup, current=10.0, frequency=10e3, material_db=db
+        )
+        expected_keys = {
+            "skin_depth", "b_field_surface_z", "current_density",
+            "power_density", "total_power", "radial_positions",
+            "axial_positions", "snapshot",
+        }
+        assert set(result.keys()) == expected_keys
+
+    def test_grid_shapes(self, steel_setup: InductionSetup, db: MaterialDatabase) -> None:
+        """current_density/power_density grids match (n_z, n_r)."""
+        n_r, n_z = 80, 15
+        result = calculate_induction_heating_2d(
+            steel_setup, current=10.0, frequency=10e3, material_db=db,
+            num_radial_points=n_r, num_axial_points=n_z,
+        )
+        assert result["current_density"].shape == (n_z, n_r)
+        assert result["power_density"].shape == (n_z, n_r)
+        assert result["b_field_surface_z"].shape == (n_z,)
+        assert result["radial_positions"].shape == (n_r,)
+        assert result["axial_positions"].shape == (n_z,)
+
+    def test_positive_total_power(self, steel_setup: InductionSetup, db: MaterialDatabase) -> None:
+        """Total power is positive."""
+        result = calculate_induction_heating_2d(
+            steel_setup, current=10.0, frequency=10e3, material_db=db
+        )
+        assert result["total_power"] > 0
+
+    def test_total_power_same_order_of_magnitude_as_1d(
+        self, steel_setup: InductionSetup, db: MaterialDatabase
+    ) -> None:
+        """This is a refinement of the existing on-axis calculation, not a
+        wholesale change -- total power should stay in a similar order of
+        magnitude, not jump by orders of magnitude."""
+        result_1d = calculate_induction_heating(
+            steel_setup, current=100.0, frequency=10e3, material_db=db
+        )
+        result_2d = calculate_induction_heating_2d(
+            steel_setup, current=100.0, frequency=10e3, material_db=db
+        )
+        ratio = result_2d["total_power"] / result_1d["total_power"]
+        assert 0.1 < ratio < 10.0
+
+    def test_axial_falloff_power_lower_near_coil_edge_than_center(
+        self, db: MaterialDatabase
+    ) -> None:
+        """The actual point of Phase 1: power density near/beyond the coil's
+        axial extent must be measurably LOWER than at the coil's axial
+        center, for the same radial position. Without this, the "no axial
+        dependence" bug is not actually fixed. Uses a workpiece as long as
+        the coil so slices near its ends sit right at/beyond the coil's
+        axial extent, where the field is known to fall off sharply."""
+        coil = SolenoidCoil(
+            inner_radius=0.025, outer_radius=0.030, length=0.10, turns=20, wire_diameter=0.005,
+        )
+        wp = CylindricalWorkpiece(
+            radius=0.020, length=0.10, material_name="Low Carbon Steel (AISI 1018)",
+        )
+        setup = InductionSetup(coil=coil, workpiece=wp, gap=coil.inner_radius - wp.radius)
+
+        result = calculate_induction_heating_2d(
+            setup, current=100.0, frequency=10e3, material_db=db, num_axial_points=41,
+        )
+        z = result["axial_positions"]
+        p_zr = result["power_density"]
+
+        z_center_idx = int(np.argmin(np.abs(z)))
+        z_edge_idx = int(np.argmax(z))  # far end of the workpiece (coil edge)
+
+        # Compare at the workpiece surface (last radial index), where power
+        # density is largest and the skin-effect signal is clearest.
+        p_center_surface = p_zr[z_center_idx, -1]
+        p_edge_surface = p_zr[z_edge_idx, -1]
+
+        assert p_edge_surface < p_center_surface
+
+    def test_workpiece_extends_beyond_coil_power_falls_further(
+        self, db: MaterialDatabase
+    ) -> None:
+        """A workpiece that extends past the coil's ends should show even
+        lower power density at its extreme ends than a workpiece confined to
+        the coil's length -- confirming the falloff continues realistically
+        past the coil's active length rather than plateauing."""
+        coil = SolenoidCoil(
+            inner_radius=0.025, outer_radius=0.030, length=0.10, turns=20, wire_diameter=0.005,
+        )
+        wp = CylindricalWorkpiece(
+            radius=0.020, length=0.16, material_name="Low Carbon Steel (AISI 1018)",
+        )
+        setup = InductionSetup(coil=coil, workpiece=wp, gap=coil.inner_radius - wp.radius)
+        assert setup.workpiece_extends_beyond_coil
+
+        result = calculate_induction_heating_2d(
+            setup, current=100.0, frequency=10e3, material_db=db, num_axial_points=41,
+        )
+        p_zr = result["power_density"]
+        z_center_idx = int(np.argmin(np.abs(result["axial_positions"])))
+
+        p_center_surface = p_zr[z_center_idx, -1]
+        p_end_surface = p_zr[0, -1]  # extreme end, well beyond the coil
+
+        assert p_end_surface < p_center_surface
+        assert np.all(np.isfinite(p_zr))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from induction_heating.core.geometry import CylindricalWorkpiece, InductionSetup, SolenoidCoil
@@ -183,3 +184,53 @@ class TestCrossSectionViewFormatting:
 
         view.set_view("power_density")
         assert 'Power Density' in view.axes.get_title()
+
+
+# ---------------------------------------------------------------------------
+# Regression guard: power density must vary along the z-axis (Phase 1)
+# ---------------------------------------------------------------------------
+
+class TestPowerDensityAxialVariation:
+    """Regression guard for the axial-uniformity bug.
+
+    Before Phase 1, the power-density grid was computed once (on-axis, at
+    the coil's center) and simply broadcast/tiled uniformly along the whole
+    z-axis -- the analytical model had no real axial dependence. This test
+    exists specifically to catch a silent reintroduction of that bug: it
+    fails if the displayed power-density grid is ever constant along z
+    again.
+    """
+
+    @pytest.fixture
+    def view(self, qtbot) -> CrossSectionView:
+        v = CrossSectionView()
+        qtbot.addWidget(v)
+        return v
+
+    def test_power_density_not_uniform_along_z(
+        self, view: CrossSectionView, steel_setup: InductionSetup
+    ) -> None:
+        """Power density at a fixed radius must differ across axial slices."""
+        view.calculate_and_plot_field(steel_setup, current=100.0)
+
+        p = view._power_density_data
+        grid_r = view._grid_r
+        grid_z = view._grid_z
+        wp = steel_setup.workpiece
+
+        # Pick a radial column near the workpiece surface (where power
+        # density is largest and skin-effect variation is clearest), and
+        # restrict to axial rows within the workpiece's own axial extent
+        # (rows further out are legitimately zero -- outside the workpiece).
+        r_idx = int(np.argmin(np.abs(grid_r - 0.9 * wp.radius)))
+        within_wp = np.abs(grid_z) <= wp.length / 2.0
+        column = p[within_wp, r_idx]
+
+        assert column.size > 5
+        assert not np.allclose(column, column[0]), (
+            "power density is uniform along z -- the axial-broadcast bug "
+            "appears to have been reintroduced"
+        )
+        # The old broadcast/tile behavior would have zero variance; require
+        # a real, non-negligible spread relative to the peak value.
+        assert np.ptp(column) > 0.05 * np.max(column)
