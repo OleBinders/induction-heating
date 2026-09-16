@@ -281,7 +281,7 @@ class MainWindow(QMainWindow):
 
             # Get center axial slice (z=0) for radial profiles
             z_center_idx = np.argmin(np.abs(self.cross_section_view._grid_z))
-            b_center = result["b_field_surface"][z_center_idx, :]
+            b_center = result["b_field_grid"][z_center_idx, :]
             j_center = result["current_density"][z_center_idx, :]
             p_center = result["power_density"][z_center_idx, :]
 

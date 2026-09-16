@@ -64,9 +64,17 @@ class TestEddyCurrentDensity:
         r = np.array([a])
 
         j = eddy_current_density(b_surf, f, rho, mu_r, a, r)
-        # J_surface = H_surface * sqrt(2) / delta, H_surface = B_surface / mu
+
+        # Independent derivation, NOT mirroring the implementation: H is
+        # continuous across the workpiece surface (no free surface current),
+        # so H_surface = H_applied = b_surface / mu_0 -- NOT
+        # b_surface / (mu_0 * mu_r). b_surface itself is already the coil's
+        # vacuum-field value (solenoid_b_field_on_axis uses only mu_0()), so
+        # dividing by the workpiece's own permeability a second time here
+        # would double-count it (this was a real, previously-shipped bug --
+        # see TestPermeabilityIncreasesPower below for the physical symptom).
         delta = calculate_skin_depth(rho, mu_r, f)
-        h_surface = b_surf / (mu_0() * mu_r)
+        h_surface = b_surf / mu_0()
         j_surface = h_surface * math.sqrt(2.0) / delta
         assert j[0] == pytest.approx(j_surface, rel=1e-6)
 
@@ -134,6 +142,62 @@ class TestEddyCurrentDensity:
         j_low = eddy_current_density(0.005, f, rho, mu_r, a, r)
         j_high = eddy_current_density(0.010, f, rho, mu_r, a, r)
         assert j_high[0] > j_low[0]
+
+
+class TestPermeabilityIncreasesPower:
+    """Regression test: higher relative permeability must increase absorbed
+    power, not decrease it.
+
+    A previous bug divided the applied surface field by the workpiece's own
+    relative permeability (b_surface / (mu_0 * mu_r) instead of b_surface /
+    mu_0), which made computed power *fall* with increasing permeability --
+    the opposite of real induction-heating physics, where magnetic steel
+    below its Curie point heats far more efficiently than non-magnetic
+    metals at the same applied field. That bug passed the full test suite
+    because no test compared power across different permeabilities; this one
+    exists specifically to close that gap.
+    """
+
+    def test_total_power_monotonic_in_permeability(self) -> None:
+        b_surf = 0.01
+        f = 10e3
+        rho = 1.43e-7
+        a = 0.020
+        length = 0.08
+        num_points = 300
+
+        powers = []
+        for mu_r in (1.0, 50.0, 100.0, 200.0, 300.0):
+            r = np.linspace(0, a, num_points)
+            j = eddy_current_density(b_surf, f, rho, mu_r, a, r)
+            powers.append(total_power(j, rho, a, length, num_points=num_points))
+
+        assert powers == sorted(powers), (
+            f"total_power should increase monotonically with relative_permeability, "
+            f"got {powers}"
+        )
+
+    def test_magnetic_steel_absorbs_more_than_nonmagnetic_copper(
+        self, db: MaterialDatabase
+    ) -> None:
+        """Same coil/current/frequency: magnetic steel (mu_r~200 at 20C) must
+        absorb substantially more power than non-magnetic copper (mu_r=1) --
+        this is the entire physical basis of induction hardening."""
+        coil = SolenoidCoil(
+            inner_radius=0.025, outer_radius=0.030, length=0.10, turns=20, wire_diameter=0.005,
+        )
+
+        def power_for(material_name: str) -> float:
+            wp = CylindricalWorkpiece(radius=0.020, length=0.08, material_name=material_name)
+            setup = InductionSetup(coil=coil, workpiece=wp, gap=coil.inner_radius - wp.radius)
+            result = calculate_induction_heating(
+                setup, current=100.0, frequency=10e3, temperature=20.0, material_db=db,
+            )
+            return result["total_power"]
+
+        p_steel = power_for("Low Carbon Steel (AISI 1018)")
+        p_copper = power_for("Copper (Electrolytic Tough Pitch)")
+        assert p_steel > p_copper
 
 
 class TestEddyCurrentRegimeContinuity:

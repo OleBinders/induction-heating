@@ -107,30 +107,12 @@ class MaterialDatabase:
     def _resolve_material_key(self, material_name: str) -> str:
         """Resolve a material name to its canonical database key.
 
-        Supports exact match and partial substring match (case-insensitive).
+        Delegates to get_material() so the exact/partial-match lookup logic
+        lives in one place. self._materials and self._interpolators are always
+        keyed identically (both by material.name.lower(), set in _load_all()),
+        so the resolved material's own key is always a valid interpolators key.
         """
-        key = material_name.lower()
-
-        # Exact match first
-        if key in self._interpolators:
-            return key
-
-        # Partial match
-        matches = [
-            k for k in self._interpolators if key in k
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise KeyError(
-                f"Ambiguous material '{material_name}'. Matches: {', '.join(matches)}"
-            )
-
-        available = list(self._interpolators.keys())
-        raise KeyError(
-            f"Material '{material_name}' not found in database. "
-            f"Available: {', '.join(m.title() for m in available)}"
-        )
+        return self.get_material(material_name).name.lower()
 
     def get_property_at_temperature(
         self, material_name: str, property_name: str, temperature: float
@@ -206,13 +188,21 @@ class MaterialDatabase:
 
         # Method 2: Sigmoid model (if curie_temperature available)
         if material.curie_temperature is not None:
-            # Estimate mu_r_0 from data or use default
-            if "relative_permeability" in self._interpolators[key]:
-                interp = self._interpolators[key]["relative_permeability"]
-                mu_r_0 = float(interp(temp_range[0]))
-            else:
-                mu_r_0 = 200.0  # Default for steel
+            if "relative_permeability" not in self._interpolators[key]:
+                # No permeability data at all, so mu_r_0 can't be estimated from
+                # this material's own data. Rather than guess a material-agnostic
+                # number (e.g. steel's ~200 would badly misrepresent a different
+                # ferromagnetic alloy), fail loudly -- same philosophy as the
+                # out-of-range ValueError in get_property_at_temperature above.
+                raise ValueError(
+                    f"'{material.name}' has a Curie temperature "
+                    f"({material.curie_temperature}°C) but no relative_permeability "
+                    "data, so mu_r_0 cannot be estimated. Add permeability data "
+                    "points to the material's JSON file."
+                )
 
+            interp = self._interpolators[key]["relative_permeability"]
+            mu_r_0 = float(interp(temp_range[0]))
             return permeability_sigmoid(temperature, mu_r_0, material.curie_temperature)
 
         # Method 3: Non-magnetic

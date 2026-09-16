@@ -13,6 +13,7 @@ from induction_heating.core.geometry import CylindricalWorkpiece, InductionSetup
 from induction_heating.io.export import (
     create_setup_from_state,
     export_csv,
+    import_csv,
     load_simulation,
     save_simulation,
 )
@@ -76,6 +77,39 @@ class TestExportCSV:
 
         lines = filepath.read_text().strip().split("\n")
         assert len(lines) == 4  # Header + 3 data rows
+
+
+class TestImportCSV:
+    """Test CSV round-trip (export_csv -> import_csv)."""
+
+    def test_round_trip_values_match(self, tmp_path: Path) -> None:
+        """Values read back match what was written, within CSV's 6-sig-fig precision."""
+        filepath = tmp_path / "results.csv"
+        r = np.array([0.0, 0.01, 0.02])
+        b = np.array([0.01, 0.008, 0.005])
+        j = np.array([1.234567e6, 8e5, 5e5])
+        p = np.array([1.234567e8, 8e7, 5e7])
+
+        export_csv(filepath, r, b, j, p)
+        data = import_csv(filepath)
+
+        np.testing.assert_allclose(data["r"], r, rtol=1e-5)
+        np.testing.assert_allclose(data["b_field"], b, rtol=1e-5)
+        np.testing.assert_allclose(data["current_density"], j, rtol=1e-5)
+        np.testing.assert_allclose(data["power_density"], p, rtol=1e-5)
+
+    def test_import_missing_file_raises(self) -> None:
+        """Import raises FileNotFoundError for a missing file."""
+        with pytest.raises(FileNotFoundError):
+            import_csv("/nonexistent/results.csv")
+
+    def test_import_wrong_header_raises(self, tmp_path: Path) -> None:
+        """Import raises ValueError for a file that isn't an export_csv output."""
+        filepath = tmp_path / "not_ours.csv"
+        filepath.write_text("a,b,c\n1,2,3\n")
+
+        with pytest.raises(ValueError, match="Unexpected CSV header"):
+            import_csv(filepath)
 
 
 # ---------------------------------------------------------------------------

@@ -32,9 +32,13 @@ def eddy_current_density(
 
     Uses the exact Kelvin-function (Lord Kelvin's classical) solution for a
     solid cylinder in a uniform axial AC field, for a/δ ≤ 50. Above that ratio
-    it switches to the exponential thick-workpiece approximation, purely to
-    avoid floating-point overflow in the Kelvin functions -- the two agree to
-    within ~1% at a/δ = 50, so the switch introduces no visible discontinuity.
+    it switches to the exponential thick-workpiece approximation -- the two
+    agree to within ~1% at a/δ = 50 (verified numerically by comparing
+    integrated power at a/δ = 30-100), so the switch introduces no visible
+    discontinuity. This is not a numerical-overflow workaround: scipy's Kelvin
+    functions stay finite until a/δ ≈ 710, far past this threshold -- the
+    switch is purely about using the simpler asymptotic formula once the exact
+    and approximate solutions have already converged.
 
     Args:
         b_surface: Magnetic flux density at workpiece surface (T).
@@ -57,11 +61,22 @@ def eddy_current_density(
     ratio = a / delta
 
     # Surface current density from the standard skin-effect boundary condition:
-    # J_surface = H_surface * √2 / δ, where H_surface = B_surface / μ. (This is
-    # the same result as for a semi-infinite plane conductor: |dH/dx| at the
-    # surface for H(x) = H0·exp(-(1+j)x/δ).)
-    mu = mu_0() * relative_permeability
-    h_surface = b_surface / mu
+    # J_surface = H_surface * √2 / δ, where H_surface = B_surface / μ0.
+    #
+    # b_surface is the *applied* field from the coil (solenoid_b_field_on_axis
+    # uses only mu_0() -- it has no dependence on the workpiece's material).
+    # Tangential H is continuous across the workpiece surface (no free surface
+    # current), so H just inside the surface equals H_applied = b_surface/mu_0
+    # -- NOT b_surface/(mu_0*relative_permeability). Dividing by the workpiece's
+    # own permeability here was a bug: it made computed power fall with
+    # increasing permeability instead of rising with it, the opposite of real
+    # induction-heating behavior (this is why magnetic steel below its Curie
+    # point heats far more efficiently than non-magnetic metals at the same
+    # applied field -- the entire basis of induction hardening).
+    #
+    # (This is the same H(x) result as for a semi-infinite plane conductor:
+    # |dH/dx| at the surface for H(x) = H0·exp(-(1+j)x/δ).)
+    h_surface = b_surface / mu_0()
     j_surface = h_surface * math.sqrt(2.0) / delta
 
     if ratio > 50.0:

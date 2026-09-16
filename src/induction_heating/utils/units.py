@@ -3,8 +3,16 @@
 This module provides a singleton UnitRegistry and convenience functions
 for creating and manipulating physical quantities with proper units.
 
-All electromagnetic calculations in this project MUST use quantities
-from this module — never raw floats for physical values.
+In practice, the core numeric pipeline (induction_heating.core.*,
+induction_heating.materials.*) works in raw floats/NumPy arrays, always in
+SI base units (Ω·m, T, Hz, m, °C as noted per-argument in docstrings) --
+not pint.Quantity. That's a deliberate tradeoff: scipy's special functions
+(ber/bei, elliptic integrals, etc.) and vectorized NumPy operations don't
+accept Quantity objects, so threading Pint through the hot calculation path
+would mean unwrapping/rewrapping constantly for little safety benefit there.
+This module exists for unit-*conversion* at the edges (e.g. GUI unit display,
+import/export of values in non-SI units) where Pint's conversion machinery
+is actually useful -- not as a wrapper mandated for internal calculations.
 """
 
 from __future__ import annotations

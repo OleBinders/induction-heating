@@ -10,7 +10,7 @@ from matplotlib.patches import Rectangle
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from induction_heating.core.electromagnetic import solenoid_b_field_on_axis
+from induction_heating.core.electromagnetic import solenoid_b_field_off_axis
 from induction_heating.core.geometry import InductionSetup
 
 
@@ -116,12 +116,13 @@ class CrossSectionView(QWidget):
                                   num_points: int = 100, material_db=None) -> dict | None:
         """Calculate B-field on 2D grid and display as contour plot.
 
-        The B-field map is computed directly here (an on-axis approximation used
-        purely for the visualization). The eddy-current/power numbers are not
-        reimplemented here -- they come from the tested
-        ``eddy_currents.calculate_induction_heating`` pipeline, so the plot and
-        the numerical results panel always agree with each other and with the
-        test suite.
+        The B-field map uses the exact off-axis solution (elliptic integrals)
+        everywhere, so it's physically valid both inside and outside the
+        workpiece -- not an on-axis approximation with an ad hoc falloff
+        stitched on. The eddy-current/power numbers are not reimplemented here
+        -- they come from the tested ``eddy_currents.calculate_induction_heating``
+        pipeline, so the plot and the numerical results panel always agree with
+        each other and with the test suite.
 
         Args:
             setup: InductionSetup with current parameters.
@@ -145,18 +146,10 @@ class CrossSectionView(QWidget):
         self._grid_z = np.linspace(-z_max, z_max, num_points)
         RR, ZZ = np.meshgrid(self._grid_r, self._grid_z)
 
-        # B-field map for visualization (on-axis approximation at each Z position).
-        # Outside the workpiece this is an illustrative falloff, not a physical
-        # off-axis solution -- solenoid_b_field_off_axis exists for that, but
-        # isn't needed for the eddy-current physics below.
-        B_z = np.zeros_like(RR)
-        for i, r in enumerate(self._grid_r):
-            b_axis = solenoid_b_field_on_axis(coil, current, ZZ[:, i])
-            if r <= wp.radius:
-                B_z[:, i] = b_axis
-            else:
-                B_z[:, i] = b_axis * (wp.radius / max(r, 1e-10))
-
+        # B-field map for visualization: exact off-axis solution over the whole
+        # grid (valid on-axis too -- solenoid_b_field_off_axis handles rho=0
+        # explicitly, and test_off_axis_consistency checks the two agree there).
+        _, B_z = solenoid_b_field_off_axis(coil, current, RR, ZZ)
         self._b_field_data = B_z
 
         # Authoritative eddy-current/power physics via the tested pipeline.
@@ -197,7 +190,11 @@ class CrossSectionView(QWidget):
 
         return {
             "skin_depth": pipeline["skin_depth"],
-            "b_field_surface": B_z,
+            # Full 2D field grid, not a scalar -- deliberately named differently
+            # from calculate_induction_heating()'s "b_field_surface" (a scalar
+            # on-axis value) so the two aren't confused if a caller ever merges
+            # both dicts.
+            "b_field_grid": B_z,
             "current_density": J_r,
             "power_density": P_r,
             "total_power": pipeline["total_power"],

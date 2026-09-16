@@ -184,6 +184,30 @@ class TestInterpolation:
         with pytest.raises(KeyError, match="not available"):
             db.get_property_at_temperature("Copper", "relative_permeability", 20)
 
+    def test_curie_material_without_permeability_data_raises(self, tmp_path: Path) -> None:
+        """A material with curie_temperature but no permeability data can't
+        estimate mu_r_0 for the sigmoid model, so it should fail loudly
+        instead of silently guessing a material-agnostic default."""
+        data = {
+            "name": "Mystery Alloy",
+            "category": "steel",
+            "density": 7800,
+            "curie_temperature": 700,
+            "resistivity": {
+                "data": [
+                    {"temperature": 20, "value": 1.5e-7},
+                    {"temperature": 900, "value": 9.0e-7},
+                ],
+                "unit": "ohm*m",
+            },
+            "relative_permeability": None,
+        }
+        (tmp_path / "mystery.json").write_text(json.dumps(data))
+        db = MaterialDatabase(data_dir=tmp_path)
+
+        with pytest.raises(ValueError, match="no relative_permeability data"):
+            db.get_permeability("Mystery Alloy", 500.0)
+
     def test_copper_resistivity_increases(self, db: MaterialDatabase) -> None:
         """Copper resistivity increases with temperature."""
         rho_20 = db.get_property_at_temperature("Copper", "resistivity", 20)

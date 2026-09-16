@@ -35,6 +35,46 @@ def export_csv(
             writer.writerow([f"{ri:.6e}", f"{bi:.6e}", f"{ji:.6e}", f"{pi:.6e}"])
 
 
+def import_csv(filepath: str | Path) -> dict[str, np.ndarray]:
+    """Read calculation results previously written by export_csv().
+
+    Args:
+        filepath: Path to the CSV file.
+
+    Returns:
+        Dict with keys "r", "b_field", "current_density", "power_density",
+        each a NumPy array of the same length.
+
+    Raises:
+        FileNotFoundError: If the file doesn't exist.
+        ValueError: If the file doesn't have the expected export_csv header.
+    """
+    filepath = Path(filepath)
+    if not filepath.exists():
+        raise FileNotFoundError(f"CSV file not found: {filepath}")
+
+    expected_header = ["Radius (m)", "B (T)", "J (A/m²)", "P (W/m³)"]
+    with open(filepath, "r", newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        if header != expected_header:
+            raise ValueError(
+                f"Unexpected CSV header {header!r}; expected {expected_header!r}"
+            )
+        rows = list(reader)
+
+    data = np.array(rows, dtype=float)
+    if data.ndim == 1:
+        data = data.reshape(-1, 4)
+
+    return {
+        "r": data[:, 0],
+        "b_field": data[:, 1],
+        "current_density": data[:, 2],
+        "power_density": data[:, 3],
+    }
+
+
 def save_simulation(
     filepath: str | Path,
     setup: InductionSetup,
