@@ -148,6 +148,12 @@ class MainWindow(QMainWindow):
         view_toggle_layout.addStretch()
 
         self.cross_section_view = CrossSectionView()
+        # Guarantee the cross-section contour plot (coil/workpiece geometry +
+        # B-field/power-density heatmap + colorbar) can never be crushed to an
+        # unreadable sliver: give it an explicit minimum height in the
+        # neighborhood of its natural canvas size (figsize=(8, 6), dpi=100
+        # implies ~600px), less a bit to leave room for its toolbar above it.
+        self.cross_section_view.setMinimumHeight(500)
         results_layout.addLayout(view_toggle_layout)
         results_layout.addWidget(self.cross_section_view, stretch=3)
 
@@ -157,13 +163,28 @@ class MainWindow(QMainWindow):
 
         # Property vs temperature plot
         self.property_plot = PropertyPlot(self._db)
+        self.property_plot.setMinimumHeight(300)
         results_layout.addWidget(self.property_plot)
 
         # Radial depth profile plots
         self.radial_plot = RadialProfilePlot()
+        self.radial_plot.setMinimumHeight(400)
         results_layout.addWidget(self.radial_plot)
 
-        self.results_dock.setWidget(results_widget)
+        # Scrollable container: the combined natural height of the
+        # cross-section view, results panel, and the two secondary plots
+        # exceeds any reasonable dock height. Without scrolling, Qt's box
+        # layout shrinks the only stretched widget (cross_section_view) to
+        # make room for its zero-stretch siblings, crushing the app's core
+        # visualization into an unreadable sliver. Wrapping in a QScrollArea
+        # (matching the pattern already used for the Parameters dock above)
+        # lets the dock scroll instead, so every widget keeps at least its
+        # minimum/natural size.
+        results_scroll = QScrollArea()
+        results_scroll.setWidgetResizable(True)
+        results_scroll.setWidget(results_widget)
+
+        self.results_dock.setWidget(results_scroll)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.results_dock)
 
     def _setup_status_bar(self) -> None:
