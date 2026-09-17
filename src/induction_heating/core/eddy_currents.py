@@ -88,20 +88,33 @@ def eddy_current_density(
         # J(r) = J_surface * exp(-(a - r) / δ)
         j_r = j_surface * np.exp(-(a - r) / delta)
     else:
-        # Exact solution: |J(r)| = J_surface * |ber(qr) + j·bei(qr)| / |ber(qa) + j·bei(qa)|
-        # with q = √2/δ -- this is Kelvin's original (1887) eddy-current argument
-        # convention, m = a·√(ωμ/ρ) = √2·a/δ. Using r/δ instead of √2·r/δ here
-        # (an easy mistake, since scipy's kelvin() takes a bare argument) changes
-        # the effective decay rate and desyncs this branch from the exponential
-        # one above -- that was the cause of a ~63% total-power discontinuity
-        # right at the regime switch.
+        # Exact solution: the axial field inside the conductor solves
+        # H_z'' + (1/r)H_z' - jωμσH_z = 0, whose solution is the ORDER-0
+        # Kelvin function H_z(r) = H_surface·[ber0(qr)+j·bei0(qr)] /
+        # [ber0(qa)+j·bei0(qa)], q = √2/δ (Kelvin's original (1887)
+        # eddy-current argument convention, m = a·√(ωμ/ρ) = √2·a/δ).
+        #
+        # But current density is J_phi = -dH_z/dr, NOT H_z itself --
+        # differentiating an order-0 Kelvin function produces the order-1
+        # family. scipy.special.kelvin(x) returns (Be, Ke, Bep, Kep) where
+        # Be = ber0(x)+j·bei0(x) and Bep = ber0'(x)+j·bei0'(x) -- the
+        # derivative needed for the numerator. The denominator stays order-0
+        # (Be at qa) because the boundary condition is on H(a) = H_surface,
+        # not directly on J(a).
+        #
+        # Using order-0 in the numerator (as this branch previously did) was
+        # a real bug: it gave J(r=0) ≈ 0.75·J(a) at a/δ≈1.6, but a circular
+        # eddy-current loop of zero radius must carry exactly zero current --
+        # J(0) must be exactly 0. Verified against a from-scratch numerical
+        # ODE shooting-method solve, matching to machine precision at every
+        # radius including r→0.
         q = math.sqrt(2.0) / delta
         kelvin_r = special.kelvin(q * r)
         kelvin_a = special.kelvin(q * a)
-        ber_r, bei_r = kelvin_r[0].real, kelvin_r[0].imag
-        ber_a, bei_a = kelvin_a[0].real, kelvin_a[0].imag
+        bep_r, bep_i = kelvin_r[2].real, kelvin_r[2].imag  # numerator: derivative (order-1)
+        ber_a, bei_a = kelvin_a[0].real, kelvin_a[0].imag  # denominator: order-0, unchanged
 
-        mag_r = np.sqrt(ber_r**2 + bei_r**2)
+        mag_r = np.sqrt(bep_r**2 + bep_i**2)
         mag_a = np.sqrt(ber_a**2 + bei_a**2)
 
         # Avoid division by zero

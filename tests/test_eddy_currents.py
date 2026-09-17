@@ -6,6 +6,7 @@ import math
 
 import numpy as np
 import pytest
+from scipy import special
 
 from induction_heating.core.eddy_currents import (
     calculate_induction_heating,
@@ -58,11 +59,27 @@ class TestEddyCurrentDensity:
     """Test eddy current density distribution."""
 
     def test_surface_value(self) -> None:
-        """At surface (r=a), J == J_surface exactly, by construction."""
+        """At surface (r=a), J == J_surface * |Bep(qa)| / |Be(qa)|.
+
+        J is *not* exactly j_surface: j_surface is the order-0 boundary
+        condition on H(a), while J(r) = -dH/dr introduces the order-1
+        (derivative) Kelvin function in the numerator. The ratio computed
+        here comes from an independent call to scipy.special.kelvin (the
+        same one the production code uses, since that formula -- not this
+        particular scipy call -- is what's being locked in as a regression
+        guard; the real independent verification is the Maxwell's-equations
+        derivation, confirmed by a from-scratch ODE shooting-method solve).
+        """
         b_surf = 0.01  # 10 mT
         f = 10e3
         rho = 1.43e-7
-        mu_r = 200.0
+        # Non-magnetic (mu_r=1) so a/delta ~ 10.5 for a=0.020m -- comfortably
+        # within the exact/Kelvin-function branch (a/delta <= 50). mu_r=200
+        # at this frequency/radius (a/delta ~ 149) would instead exercise the
+        # exponential thick-workpiece branch, where J(a) == j_surface exactly
+        # by construction and this ratio-based check would not be testing
+        # the code path this test is meant to guard.
+        mu_r = 1.0
         a = 0.020
         r = np.array([a])
 
@@ -79,7 +96,33 @@ class TestEddyCurrentDensity:
         delta = calculate_skin_depth(rho, mu_r, f)
         h_surface = b_surf / mu_0()
         j_surface = h_surface * math.sqrt(2.0) / delta
-        assert j[0] == pytest.approx(j_surface, rel=1e-6)
+
+        q = math.sqrt(2.0) / delta
+        kelvin_a = special.kelvin(q * a)
+        bep_a = abs(kelvin_a[2])  # order-1 (derivative) magnitude -- numerator
+        be_a = abs(kelvin_a[0])  # order-0 magnitude -- denominator
+        expected = j_surface * bep_a / be_a
+
+        assert j[0] == pytest.approx(expected, rel=1e-6)
+
+    def test_current_vanishes_at_axis(self) -> None:
+        """J(r=0) must be exactly zero: an azimuthal eddy-current loop of
+        zero radius has no circumference to carry current. This is the
+        physical law violated by the order-0-in-the-numerator bug (which
+        gave J(0)/J(a) ~ 0.75 at a/delta ~ 1.6) and is the most important
+        regression guard from that fix."""
+        b_surf = 0.01
+        f = 10e3
+        rho = 1.43e-7
+        mu_r = 200.0
+
+        # Exercise several a/delta ratios, all comfortably within the exact
+        # (Kelvin-function) branch (a/delta <= 50).
+        delta = calculate_skin_depth(rho, mu_r, f)
+        for ratio in (0.5, 1.6, 5.0, 20.0, 49.0):
+            a = delta * ratio
+            j = eddy_current_density(b_surf, f, rho, mu_r, a, np.array([0.0]))
+            assert j[0] == pytest.approx(0.0, abs=1e-6)
 
     def test_center_less_than_surface(self) -> None:
         """At center (r=0), J < J_surface (skin effect)."""
@@ -109,7 +152,15 @@ class TestEddyCurrentDensity:
         assert j[-1] > j[0]  # surface > center
 
     def test_uniform_thin_workpiece(self) -> None:
-        """A thinner workpiece (smaller a/δ) shows more uniform J than a thick one."""
+        """A thinner workpiece (smaller a/δ) shows more uniform J than a thick one.
+
+        Uses the midpoint radius (a/2), not the center (r=0), as the
+        reference point: J(r=0) is mathematically exactly 0 regardless of
+        a/delta (see TestEddyCurrentDensity.test_current_vanishes_at_axis),
+        so a variation metric anchored at r=0 is trivially 1.0 for every
+        a/delta and can no longer distinguish "thin" from "thick" -- that
+        degenerate case is exactly what this test hit before this change.
+        """
         b_surf = 0.01
         f = 10e3
         rho = 1.43e-7
@@ -118,7 +169,8 @@ class TestEddyCurrentDensity:
         def variation(a: float) -> float:
             r = np.linspace(0, a, 10)
             j = eddy_current_density(b_surf, f, rho, mu_r, a, r)
-            return (j[-1] - j[0]) / j[-1]
+            j_mid = j[len(j) // 2]
+            return (j[-1] - j_mid) / j[-1]
 
         assert variation(0.002) < variation(0.020)
 
