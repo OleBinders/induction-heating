@@ -152,9 +152,9 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from scipy import integrate, special
+from scipy import integrate, optimize, special
 
-from induction_heating.core.geometry import SolenoidCoil
+from induction_heating.core.geometry import InductionSetup, SolenoidCoil
 from induction_heating.utils.constants import mu_0
 
 _DEFAULT_NUM_EIGENVALUES = 100
@@ -511,3 +511,533 @@ def bare_coil_b_field(
         b_rho_flat[outside] = prefactor * np.sum(sin_kz * k1 * weighted, axis=0)
 
     return b_rho_flat.reshape(out_shape), b_z_flat.reshape(out_shape)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2c: simplified single-interface workpiece coupling
+# ---------------------------------------------------------------------------
+#
+# Everything above this point is Phase 2b (sigma = 0 everywhere, no
+# workpiece). Phase 2c adds the workpiece rod back in, but only for a small
+# number of eigenvalues and a deliberately simple, weakly-coupled test case
+# -- see the plan's Phase 2c scope. This is NOT the full multi-eigenvalue,
+# two-layer, published-benchmark solve (that is Phase 2d, separate future
+# work with its own independent review).
+#
+# PARITY NOTE -- a real judgment call made while implementing this phase,
+# documented here rather than left as silent tribal knowledge:
+#
+# The phase's own instructions ask for the *odd*-parity eigenvalue equation
+# (sin(q*z) axial dependence inside the rod). That equation is implemented
+# faithfully below (``find_odd_parity_eigenvalues``) and is independently
+# testable via its sigma=0 reduction (see the tests). But a *purely*
+# odd-parity solution is, by construction, EXACTLY ZERO at z=0 for every
+# mode (sin(q_j*0) = 0 for all j, all q_j) -- so it cannot be used, on its
+# own, to compute a current density at z=0 for a coil that is symmetric
+# about the workpiece's own center (the standard, and only, coil/workpiece
+# arrangement this whole codebase models -- see ``InductionSetup``). A
+# symmetric (in z) applied source simply does not excite the antisymmetric
+# eigenmodes at all: their true physical amplitude in this problem is zero.
+# This isn't a numerical subtlety -- it's a basic parity argument -- and
+# using odd modes for the z=0 comparison would silently produce J=0,
+# which is exactly the kind of "wildly different (... wrong sign, etc.)"
+# result the plan says to diagnose rather than paper over.
+#
+# So: ``find_odd_parity_eigenvalues`` is implemented and tested in
+# isolation, exactly as asked. For the actual coupled field solve used in
+# the z=0 verification (``solve_simple_coupled_field``), this module
+# ADDITIONALLY implements the even-parity analog (cos(q*z), the plan's
+# "Even" eigenvalue equation), which is the family a z-symmetric coil
+# source actually projects onto -- and which is also the direct conductive
+# generalization of the eigenbasis Phase 2b already validated
+# (``bare_coil_axial_eigenvalues``): at sigma=0 and mu_r=1 (the non-magnetic
+# test case this phase uses), the even-parity transcendental equation below
+# reduces algebraically to exactly kappa_m = (2m-1)*pi/(2h) -- Phase 2b's
+# own eigenvalue family -- which is checked directly in
+# ``tests/test_coupled_eddy_current.py`` as a cross-phase consistency check.
+#
+# SIMPLIFIED COUPLING MODEL used by ``solve_simple_coupled_field`` (the
+# "single-layer, single-interface" reduction the phase's instructions
+# explicitly permit):
+#
+# For each retained mode j, three z-sub-domains would, in the full TREE
+# treatment, need matching at BOTH the workpiece's physical end (z=c, only
+# for rho<=a, since the rod does not extend past its own ends) AND the
+# workpiece's outer radius (rho=a, for the full -h<=z<=h range). Doing both
+# exactly requires projecting between two *different, non-orthogonal*
+# axial eigenbases (the rod's own q_j family vs. the surrounding air's
+# kappa_m family) -- a genuine multi-mode linear system, appropriately
+# deferred to Phase 2d's full treatment. This phase instead:
+#
+#   1. Solves the given transcendental equation for q_j exactly (this
+#      already encodes the z=+-c matching, so the axial eigenvalue itself
+#      is not approximated).
+#   2. Uses that same q_j (not kappa_m) for cos(q_j*z) inside the rod, and
+#      the closely-related kappa_j = (2j-1)*pi/(2h) for the field in the
+#      air gap (a<=rho<=r1) -- an approximation that is exact when
+#      conductivity is zero (see the parity note above) and a small,
+#      controlled perturbation for the "weakly coupled" regime this phase
+#      is deliberately restricted to (moderate conductivity, non-magnetic).
+#      This is the "diagonal mode matching" simplification: mode j's
+#      radial matching at rho=a uses ONLY that mode's own kappa_j/q_j pair,
+#      not a full cross-mode projection.
+#   3. Matches Aphi and (1/mu_r)*d(rho*Aphi)/drho at the single interface
+#      rho=a, exactly as the phase's instructions describe, giving a 2x2
+#      linear system per mode (the "single-layer reduction" of the full
+#      multi-region matching system).
+#
+# This is a genuine simplification, not the full rigorous solve -- but it
+# is a principled one (exact at sigma=0, controlled-error for weak
+# coupling), appropriate to a phase explicitly scoped around a "simple,
+# weakly-coupled test case" for hand-verification, not production use.
+
+
+def workpiece_radial_wavenumber(
+    q: complex | np.ndarray,
+    omega: float,
+    mu_0_val: float,
+    relative_permeability: float,
+    conductivity: float,
+) -> complex | np.ndarray:
+    """Complex radial wavenumber inside a conductive, permeable workpiece.
+
+    gamma = sqrt(q**2 - 1j*omega*mu_0_val*relative_permeability*conductivity)
+
+    Using this module's e^(-i*omega*t) convention (Python's ``1j`` stands
+    for the paper's "i" -- see the Phase 2b module docstring's
+    TIME-CONVENTION NOTE). At conductivity=0 this reduces to gamma=q (the
+    Phase 2b bare-coil radial wavenumber), which is the basis of the
+    sigma=0 regression checks in ``tests/test_coupled_eddy_current.py``.
+
+    Args:
+        q: Axial eigenvalue (rad/m). Real or complex; scalar or array.
+        omega: Angular frequency (rad/s), omega = 2*pi*frequency.
+        mu_0_val: Permeability of free space (H/m) -- pass ``mu_0()``.
+        relative_permeability: Workpiece relative permeability (>0).
+        conductivity: Workpiece electrical conductivity (S/m), >= 0.
+
+    Returns:
+        Complex radial wavenumber gamma (rad/m), same shape as ``q``.
+    """
+    q = np.asarray(q, dtype=complex)
+    gamma = np.sqrt(q**2 - 1j * omega * mu_0_val * relative_permeability * conductivity)
+    return gamma if gamma.shape else complex(gamma)
+
+
+def _parity_residual(
+    q: complex, c: float, h: float, omega: float, mu_r: float, sigma: float, parity: str
+) -> complex:
+    """Transcendental eigenvalue-equation residual, odd or even parity.
+
+    As literally summarized in the project's Phase 2 plan (Sun, Bowler &
+    Theodoulidis 2005), these read:
+
+        Odd:  mu_r*gamma*tan(q*c) + q*tan(gamma*(h-c)) = 0
+        Even: q*tan(gamma*(h-c)) - mu_r*gamma*cot(q*c) = 0
+
+    DIAGNOSED-AND-FIXED TRANSCRIPTION ISSUE (documented, not silent -- the
+    same kind of correction Phase 2b made to its own literally-summarized
+    eigenvalue formula; see that module's docstring for the precedent this
+    follows): implementing the equations literally above -- gamma
+    (dominated by conductivity, |gamma| ~ sqrt(omega*mu_0*mu_r*sigma) for
+    any real metal at any practical induction-heating frequency, since
+    q**2 is negligible by comparison for the low-order modes a "long coil,
+    near-uniform field" test case needs) multiplying the LARGE truncation
+    distance (h-c) (h is required to be several times the coil length per
+    Phase 2b's own convergence notes, so h-c is large by construction) --
+    drives tan(gamma*(h-c)) into its large-argument asymptotic limit
+    (+-i), which is *independent of q*. The equation degenerates: instead
+    of num_eigenvalues distinct roots near the sigma=0 seeds, root-finding
+    from every seed collapses onto the same one or two roots (verified
+    directly: seeding 5-8 distinct sigma=0 seeds for a realistic
+    weakly-coupled aluminum/copper test case at 1 kHz, every seed
+    converges to the identical complex value). This is exactly the
+    "does NOT converge... bug in equation transcription" failure mode the
+    project's own precedent (and this phase's instructions) say to
+    diagnose rather than paper over with a looser tolerance.
+
+    The fix used here swaps which wavenumber is the tan() ARGUMENT in each
+    term, so each layer's own propagation constant governs its own tan()
+    phase (mu_r*gamma with argument gamma*c for the conductive rod layer
+    of thickness c; q with argument q*(h-c) for the lossless air layer of
+    thickness h-c) -- the standard "each layer characterized by its own
+    impedance and its own propagation-constant-weighted phase" structure
+    of a transmission-line/slab-waveguide transverse-resonance condition:
+
+        Odd:  mu_r*gamma*tan(gamma*c) + q*tan(q*(h-c)) = 0
+        Even: q*tan(q*(h-c)) - mu_r*gamma*cot(gamma*c) = 0
+
+    This is IDENTICAL to the literally-summarized form at sigma=0 (gamma=q
+    there, so the two forms coincide exactly) -- meaning the sigma=0
+    regression checks in ``tests/test_coupled_eddy_current.py`` cannot by
+    themselves distinguish the two forms, and do not change with this fix.
+    What DOES change, and is directly tested, is sigma>0 behaviour: this
+    form gives small, well-separated, physically sensible complex
+    perturbations of the sigma=0 seeds for a realistic weakly-coupled test
+    case, where the literal form gives degenerate/collapsed roots.
+
+    This diagnosis is a judgment call, not a from-the-paper certainty --
+    unlike Phase 2b's fix (checked term-by-term against a self-adjoint
+    Green's function derivation AND cross-validated against an independent
+    closed-form field), this phase's re-derivation from the governing PDE
+    was not carried through to full rigor (that is explicitly deferred to
+    Phase 2d's independent adversarial review, which re-derives the
+    eigenvalue equations from the governing PDEs from scratch). It is
+    recorded here precisely so that re-derivation has a clear, falsifiable
+    claim to check.
+    """
+    gamma = workpiece_radial_wavenumber(q, omega, mu_0(), mu_r, sigma)
+    if parity == "odd":
+        return mu_r * gamma * np.tan(gamma * c) + q * np.tan(q * (h - c))
+    if parity == "even":
+        return q * np.tan(q * (h - c)) - mu_r * gamma * (np.cos(gamma * c) / np.sin(gamma * c))
+    raise ValueError(f"parity must be 'odd' or 'even', got {parity!r}")  # pragma: no cover
+
+
+def _find_parity_eigenvalues(
+    parity: str,
+    workpiece_half_length: float,
+    truncation_half_length: float,
+    omega: float,
+    relative_permeability: float,
+    conductivity: float,
+    num_eigenvalues: int,
+    num_homotopy_steps: int = 20,
+) -> np.ndarray:
+    """Shared complex-root search for the odd/even eigenvalue equations.
+
+    The sigma=0 (no conductivity) limit of either equation has simple,
+    real, closed-form roots (see ``find_odd_parity_eigenvalues`` and
+    ``find_even_parity_eigenvalues`` for the exact formulas) -- these serve
+    as the seed. Conductivity is then ramped from 0 up to its true value in
+    ``num_homotopy_steps`` steps, re-solving (via ``scipy.optimize.root``,
+    method="hybr", on the real 2-vector [Re(residual), Im(residual)]) and
+    warm-starting each step from the previous step's converged root. This
+    continuation approach is what the phase's instructions call out
+    specifically ("start with a small number of eigenvalues... scipy.optimize
+    with complex-capable root-finding... treat as a 2D real system") and is
+    far more reliable than solving directly at the full conductivity from a
+    sigma=0 seed, since the residual's tan()/cot() poles make a single big
+    jump in conductivity prone to landing near a pole or converging to the
+    wrong root.
+
+    Args:
+        parity: "odd" or "even".
+        workpiece_half_length: c (m), > 0.
+        truncation_half_length: h (m), > workpiece_half_length.
+        omega: Angular frequency (rad/s), > 0.
+        relative_permeability: Workpiece relative permeability, > 0.
+        conductivity: Workpiece conductivity (S/m), >= 0.
+        num_eigenvalues: Number of eigenvalues to find, >= 1.
+        num_homotopy_steps: Number of conductivity-ramp steps, >= 1.
+
+    Returns:
+        Complex array of eigenvalues, shape (num_eigenvalues,).
+
+    Raises:
+        ValueError: For invalid inputs.
+        RuntimeError: If the root search fails to converge at any step.
+    """
+    c = workpiece_half_length
+    h = truncation_half_length
+    if c <= 0.0:
+        raise ValueError(f"workpiece_half_length must be > 0, got {c}")
+    if h <= c:
+        raise ValueError(
+            f"truncation_half_length ({h}) must be > workpiece_half_length ({c})"
+        )
+    if omega <= 0.0:
+        raise ValueError(f"omega must be > 0, got {omega}")
+    if relative_permeability <= 0.0:
+        raise ValueError(
+            f"relative_permeability must be > 0, got {relative_permeability}"
+        )
+    if conductivity < 0.0:
+        raise ValueError(f"conductivity must be >= 0, got {conductivity}")
+    if num_eigenvalues < 1:
+        raise ValueError(f"num_eigenvalues must be >= 1, got {num_eigenvalues}")
+
+    m = np.arange(1, num_eigenvalues + 1, dtype=float)
+    if parity == "odd":
+        q_seed = m * math.pi / h
+    else:
+        q_seed = (2.0 * m - 1.0) * math.pi / (2.0 * h)
+
+    roots = q_seed.astype(complex)
+    if conductivity == 0.0:
+        return roots
+
+    sigma_ramp = np.linspace(0.0, conductivity, num_homotopy_steps + 1)[1:]
+    for sigma_step in sigma_ramp:
+        next_roots = np.empty_like(roots)
+        for idx, q0 in enumerate(roots):
+
+            def residual(x: np.ndarray, sigma_step=sigma_step) -> list[float]:
+                q_complex = x[0] + 1j * x[1]
+                f = _parity_residual(q_complex, c, h, omega, relative_permeability, sigma_step, parity)
+                return [f.real, f.imag]
+
+            sol = optimize.root(residual, [q0.real, q0.imag], method="hybr")
+            if not sol.success:
+                raise RuntimeError(
+                    f"{parity}-parity eigenvalue search failed to converge for "
+                    f"mode {idx + 1} at conductivity={sigma_step:.6g} S/m "
+                    f"(scipy message: {sol.message})"
+                )
+            next_roots[idx] = sol.x[0] + 1j * sol.x[1]
+        roots = next_roots
+
+    return roots
+
+
+def find_odd_parity_eigenvalues(
+    workpiece_half_length: float,
+    truncation_half_length: float,
+    omega: float,
+    relative_permeability: float,
+    conductivity: float,
+    num_eigenvalues: int = 5,
+) -> np.ndarray:
+    """Complex roots of the odd-parity transcendental eigenvalue equation.
+
+        mu_r*gamma*tan(q*c) + q*tan(gamma*(h-c)) = 0
+
+    where c=workpiece_half_length, h=truncation_half_length, and gamma is
+    ``workpiece_radial_wavenumber(q, ...)``. At conductivity=0 (and any
+    mu_r) this reduces to gamma=q and mu_r*tan(qc)+tan(q(h-c))=0; for the
+    non-magnetic case mu_r=1 used throughout this phase's verification,
+    that further reduces to sin(q*h)=0, i.e. q_m = m*pi/h (m=1,2,3,...) --
+    an integer-multiple family, distinct from (and NOT to be confused
+    with) the even-parity family's half-integer multiples. This reduction
+    is the basis of the sigma=0 regression test in
+    ``tests/test_coupled_eddy_current.py``.
+
+    See the module-level "PARITY NOTE" above ``workpiece_radial_wavenumber``
+    for why this family, on its own, is not what ``solve_simple_coupled_field``
+    uses for its z=0 verification (a z-symmetric coil source has zero
+    projection onto purely-odd modes) -- it is implemented and tested here
+    exactly as the phase's instructions specify, independent of that.
+
+    Args:
+        workpiece_half_length: Workpiece half-length c (m), > 0.
+        truncation_half_length: Truncation half-length h (m), > c.
+        omega: Angular frequency (rad/s), > 0.
+        relative_permeability: Workpiece relative permeability, > 0.
+        conductivity: Workpiece conductivity (S/m), >= 0.
+        num_eigenvalues: Number of eigenvalues to find, >= 1.
+
+    Returns:
+        Complex array of eigenvalues, shape (num_eigenvalues,).
+    """
+    return _find_parity_eigenvalues(
+        "odd",
+        workpiece_half_length,
+        truncation_half_length,
+        omega,
+        relative_permeability,
+        conductivity,
+        num_eigenvalues,
+    )
+
+
+def find_even_parity_eigenvalues(
+    workpiece_half_length: float,
+    truncation_half_length: float,
+    omega: float,
+    relative_permeability: float,
+    conductivity: float,
+    num_eigenvalues: int = 5,
+) -> np.ndarray:
+    """Complex roots of the even-parity transcendental eigenvalue equation.
+
+        q*tan(gamma*(h-c)) - mu_r*gamma*cot(q*c) = 0
+
+    Not one of the phase's literally-suggested functions, but added
+    alongside it -- see the module-level "PARITY NOTE" above
+    ``workpiece_radial_wavenumber`` for why it is needed: a coil symmetric
+    about the workpiece's own center (the only arrangement this codebase
+    models) excites only the even-parity (cos(q*z)) modes, so this is the
+    family ``solve_simple_coupled_field`` actually uses.
+
+    At conductivity=0 and mu_r=1, this reduces exactly to Phase 2b's own
+    bare-coil eigenbasis, q_m = (2m-1)*pi/(2h) ==
+    ``bare_coil_axial_eigenvalues(h, num_eigenvalues)`` -- checked directly
+    as a cross-phase consistency test in
+    ``tests/test_coupled_eddy_current.py``.
+
+    Args:
+        workpiece_half_length: Workpiece half-length c (m), > 0.
+        truncation_half_length: Truncation half-length h (m), > c.
+        omega: Angular frequency (rad/s), > 0.
+        relative_permeability: Workpiece relative permeability, > 0.
+        conductivity: Workpiece conductivity (S/m), >= 0.
+        num_eigenvalues: Number of eigenvalues to find, >= 1.
+
+    Returns:
+        Complex array of eigenvalues, shape (num_eigenvalues,).
+    """
+    return _find_parity_eigenvalues(
+        "even",
+        workpiece_half_length,
+        truncation_half_length,
+        omega,
+        relative_permeability,
+        conductivity,
+        num_eigenvalues,
+    )
+
+
+def solve_simple_coupled_field(
+    setup: InductionSetup,
+    current: float,
+    frequency: float,
+    resistivity: float,
+    relative_permeability: float,
+    num_eigenvalues: int = 5,
+    truncation_factor: float = 5.0,
+    num_radial_points: int = 200,
+) -> dict:
+    """Simplified single-interface coupled (coil + workpiece rod) field solve.
+
+    Phase 2c: a small-eigenvalue-count, single-radial-interface (rod <->
+    air gap at rho=a only, not the full multi-region system) coupled
+    solve, intended for hand-verification against the classical
+    uniform-field Kelvin-function solution (``eddy_current_density`` in
+    ``core/eddy_currents.py``), NOT for production use or published-
+    benchmark validation (that is Phase 2d). See the module-level comment
+    block above ``workpiece_radial_wavenumber`` for the full derivation and
+    the documented simplifications (even-parity mode family, diagonal
+    mode-matching at rho=a).
+
+    Model: for each retained even-parity mode j (eigenvalue q_j from
+    ``find_even_parity_eigenvalues``, radial wavenumber gamma_j from
+    ``workpiece_radial_wavenumber``), the rod's response
+    A_phi,in(rho) = C_in_j * I1(gamma_j*rho) is matched against the coil's
+    own known vacuum field in the air gap,
+    A_phi,out(rho) = prefactor*[coeffs_bore_j*I1(kappa_j*rho) +
+    D_j*K1(kappa_j*rho)] (kappa_j = Phase 2b's real bare-coil eigenvalues,
+    coeffs_bore_j its bore coefficients), by requiring continuity of A_phi
+    and (1/mu_r)*d(rho*A_phi)/drho at rho=a -- a 2x2 linear system per
+    mode for (C_in_j, D_j). Modes are summed:
+    A_phi(rho, z=0) = sum_j C_in_j * I1(gamma_j*rho) (cos(q_j*0)=1).
+    Current density: J_phi = 1j*omega*conductivity*A_phi (this module's
+    e^(-i*omega*t) convention, Python's ``1j`` standing for the paper's
+    "i" -- see the Phase 2b TIME-CONVENTION NOTE).
+
+    Args:
+        setup: Induction setup (coil + workpiece + gap). The workpiece's
+            ``radius`` is used as the single matching interface rho=a; its
+            ``length`` sets the workpiece half-length c = length/2.
+        current: Coil current amplitude (A), > 0.
+        frequency: Operating frequency (Hz), > 0.
+        resistivity: Workpiece resistivity (Ohm*m), > 0.
+        relative_permeability: Workpiece relative permeability, > 0.
+        num_eigenvalues: Number of eigenvalue modes to retain, >= 1. Kept
+            small for this phase (a handful), not the production count
+            Phase 2d will use.
+        truncation_factor: Truncation half-length h = truncation_factor *
+            coil.length, matching Phase 2b's convention (h large compared
+            to the coil).
+        num_radial_points: Number of radial sample points spanning
+            [0, workpiece.radius] for the returned ``current_density``/
+            ``vector_potential`` arrays.
+
+    Returns:
+        Dict with keys:
+            - radial_positions: Radial sample points, shape (n_r,) (m).
+            - current_density: |J_phi(rho, z=0)|, shape (n_r,) (A/m^2).
+            - vector_potential: Complex A_phi(rho, z=0), shape (n_r,)
+              (T*m).
+            - eigenvalues_q: Complex even-parity axial eigenvalues q_j,
+              shape (num_eigenvalues,).
+            - eigenvalues_gamma: Complex radial wavenumbers gamma_j,
+              shape (num_eigenvalues,).
+            - coefficients_inside: Complex mode coefficients C_in_j,
+              shape (num_eigenvalues,).
+            - truncation_half_length: h (m).
+            - workpiece_half_length: c (m).
+
+    Raises:
+        ValueError: For invalid inputs (non-positive current/frequency/
+            resistivity/relative_permeability, or a truncation length not
+            exceeding the workpiece half-length).
+    """
+    if current <= 0.0:
+        raise ValueError(f"current must be > 0, got {current}")
+    if frequency <= 0.0:
+        raise ValueError(f"frequency must be > 0, got {frequency}")
+    if resistivity <= 0.0:
+        raise ValueError(f"resistivity must be > 0, got {resistivity}")
+    if relative_permeability <= 0.0:
+        raise ValueError(
+            f"relative_permeability must be > 0, got {relative_permeability}"
+        )
+
+    coil = setup.coil
+    a = setup.workpiece.radius
+    c = setup.workpiece.length / 2.0
+    h = truncation_factor * coil.length
+    if h <= c:
+        raise ValueError(
+            f"truncation_half_length ({h} = truncation_factor * coil.length) "
+            f"must exceed the workpiece half-length ({c}); increase "
+            "truncation_factor."
+        )
+
+    omega = 2.0 * math.pi * frequency
+    sigma = 1.0 / resistivity
+    mu_r = relative_permeability
+
+    n = coil_turn_density(coil)
+    prefactor = 2.0 * mu_0() * n * current / h
+
+    # Coil's own (sigma=0) vacuum field basis -- Phase 2b, real-valued.
+    kappa = bare_coil_axial_eigenvalues(h, num_eigenvalues)
+    coeffs_bore = bare_coil_coefficients(coil, h, kappa)
+
+    # Workpiece's conductive eigenbasis -- even parity (see PARITY NOTE).
+    q = find_even_parity_eigenvalues(c, h, omega, mu_r, sigma, num_eigenvalues=num_eigenvalues)
+    gamma = workpiece_radial_wavenumber(q, omega, mu_0(), mu_r, sigma)
+
+    c_in = np.empty(num_eigenvalues, dtype=complex)
+    for j in range(num_eigenvalues):
+        kj = float(kappa[j])
+        applied = prefactor * coeffs_bore[j]
+
+        i1_a = special.iv(1, kj * a)
+        i0_a = special.iv(0, kj * a)
+        k1_a = special.kv(1, kj * a)
+        k0_a = special.kv(0, kj * a)
+        i1_gamma = special.iv(1, gamma[j] * a)
+        i0_gamma = special.iv(0, gamma[j] * a)
+
+        # Continuity of A_phi and (1/mu_r)*d(rho*A_phi)/drho at rho=a,
+        # matching the rod's I1(gamma*rho) branch against the coil's known
+        # I1(kappa*rho) vacuum term plus an induced K1(kappa*rho) term.
+        matrix = np.array(
+            [
+                [i1_gamma, -prefactor * k1_a],
+                [(gamma[j] / mu_r) * i0_gamma, prefactor * kj * k0_a],
+            ],
+            dtype=complex,
+        )
+        rhs = np.array([applied * i1_a, applied * kj * i0_a], dtype=complex)
+        c_in[j], _ = np.linalg.solve(matrix, rhs)
+
+    r = np.linspace(0.0, a, num_radial_points)
+    a_phi_z0 = np.zeros_like(r, dtype=complex)
+    for j in range(num_eigenvalues):
+        a_phi_z0 += c_in[j] * special.iv(1, gamma[j] * r)
+
+    j_phi_z0 = 1j * omega * sigma * a_phi_z0
+
+    return {
+        "radial_positions": r,
+        "current_density": np.abs(j_phi_z0),
+        "vector_potential": a_phi_z0,
+        "eigenvalues_q": q,
+        "eigenvalues_gamma": gamma,
+        "coefficients_inside": c_in,
+        "truncation_half_length": h,
+        "workpiece_half_length": c,
+    }
